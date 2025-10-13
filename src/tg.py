@@ -98,22 +98,27 @@ class TelegramBot:
         response = self._call_api("sendMessage", http_method='post', params=params)
         return response
 
-    def send_control_panel(self):
+    def set_bot_commands(self):
         """
-        發送帶有控制按鈕的操作面板
+        設置 Bot 的命令選單
         """
         if not self.token or not self.chat_id:
             return
 
-        keyboard = {
-            "keyboard": [
-                [{"text": "/farm_pause"}, {"text": "/farm_continue"}]
-            ],
-            "resize_keyboard": True,
-            "persistent": True
+        commands = [
+            {"command": "farm_pause", "description": "暫停任務"},
+            {"command": "farm_continue", "description": "繼續/啟動任務"}
+        ]
+
+        import json
+        params = {
+            "commands": json.dumps(commands)
         }
 
-        self.send_message("WvDAS 控制面板已啟動\n使用下方按鈕控制任務", reply_markup=keyboard)
+        response = self._call_api("setMyCommands", http_method='post', params=params)
+        if response:
+            self.send_message("WvDAS 控制選單已設置\n點擊選單按鈕查看可用命令")
+        return response
 
     def add_message_handler(self, check_fn, action_fn):
         self.msg_handlers.append((check_fn, action_fn))
@@ -211,8 +216,8 @@ def start_telegram_polling(controller):
     bot.add_message_handler(check_pause_quest, fn_pause_quest)
     bot.add_message_handler(check_continue_quest, fn_continue_quest)
 
-    # 發送控制面板
-    bot.send_control_panel()
+    # 設置 Bot 命令選單
+    bot.set_bot_commands()
 
     # 持續輪詢
     while True:
