@@ -3,9 +3,11 @@ from tkinter import ttk, scrolledtext
 import json
 import os
 import logging
+import logging.handlers
 import sys
 import cv2
 import time
+import multiprocessing
 
 # 基础模块包括:
 # LOGGER. 将输入写入到logger.txt文件中.
@@ -14,9 +16,43 @@ import time
 # TOOLTIP. 鼠标悬停时的提示.
 
 ############################################
-LOG_FILE_NAME = "log.txt"
+THREE_DAYS_AGO = time.time() - 3 * 24 * 60 * 60
+LOGS_FOLDER_NAME = "logs"
+os.makedirs(LOGS_FOLDER_NAME, exist_ok=True)
+for filename in os.listdir(LOGS_FOLDER_NAME):
+    file_path = os.path.join(LOGS_FOLDER_NAME, filename)
+    
+    # 获取最后修改时间
+    creation_time = os.path.getmtime(file_path)
+    
+    # 如果文件创建时间早于3天前，则删除
+    if creation_time < THREE_DAYS_AGO:
+        os.remove(file_path)
+############################################
+LOG_FILE_PREFIX = LOGS_FOLDER_NAME + "/log"
 logger = logging.getLogger('WvDASLogger')
+#===========================================
+def setup_file_handler():
+    """设置文件处理器"""
+    os.makedirs(LOGS_FOLDER_NAME, exist_ok=True)
+    current_time = time.strftime("%y%m%d-%H%M%S")
+    log_file_path = f"{LOG_FILE_PREFIX}_{current_time}.txt"
+    
+    file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - [%(module)s:%(funcName)s:%(lineno)d] - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(file_formatter)
+    return file_handler
 
+log_queue = multiprocessing.Queue(-1)
+queue_listener = logging.handlers.QueueListener(log_queue, setup_file_handler())
+
+def StartLogListener():
+    queue_listener.start()
+#===========================================
 class LoggerStream:
     """自定义流，将输出重定向到logger"""
     def __init__(self, logger, log_level):
@@ -38,28 +74,20 @@ class LoggerStream:
             self.logger.log(self.log_level, self.buffer)
             self.buffer = ''
 
-def RegisterFileHandler(with_timestamp = False):
-    if not with_timestamp:
-        log_file_path = LOG_FILE_NAME
-    else:
-        log_file_path = f"log_{time.time()}.txt"
+def RegisterQueueHandler():
+    """配置QueueHandler，将日志发送到队列"""
+    # 保持原有的stdout/stderr重定向
     sys.stdout = LoggerStream(logger, logging.DEBUG)
     sys.stderr = LoggerStream(logger, logging.ERROR)
-
-    if os.path.exists(log_file_path):
-        os.remove(log_file_path)
-    with open(log_file_path, 'w', encoding='utf-8') as f:
-        pass
+    
+    # 创建QueueHandler并连接到全局队列
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    queue_handler.setLevel(logging.DEBUG)
     
     logger.setLevel(logging.DEBUG)
-    file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    file_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - [%(module)s:%(funcName)s:%(lineno)d] - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
+    logger.addHandler(queue_handler)
+    logger.propagate = False
+
 def RegisterConsoleHandler():
     sys.stdout = sys.__stdout__
     sys.stderr = sys.__stderr__
@@ -129,7 +157,7 @@ def LoadImage(path):
         # 手动抛出异常
             raise ValueError(f"[OpenCV 错误] 图片加载失败，路径可能不存在或图片损坏: {path}(注意: 路径中不能包含中文.)")
     except Exception as e:
-        logger.Error(f"加载图片失败: {str(e)}")
+        logger.error(f"加载图片失败: {str(e)}")
         return None
     return img
 ############################################

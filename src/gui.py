@@ -5,15 +5,7 @@ import logging
 from script import *
 from auto_updater import *
 from utils import *
-from threading import Thread,Event
-import shutil
 
-
-############################################
-RESTART_SCREENSHOT_FOLDER_NAME = "screenshotwhenrestart"
-if os.path.exists(RESTART_SCREENSHOT_FOLDER_NAME):
-    shutil.rmtree(RESTART_SCREENSHOT_FOLDER_NAME)
-os.makedirs(RESTART_SCREENSHOT_FOLDER_NAME, exist_ok=True)
 ############################################
 class ConfigPanelApp(tk.Toplevel):
     def __init__(self, master_controller, version, msg_queue):
@@ -21,7 +13,8 @@ class ConfigPanelApp(tk.Toplevel):
         self.TITLE = f"WvDAS 巫术daphne自动刷怪 v{version} @德德Dellyla(B站)"
         self.INTRODUCTION = f"遇到问题? 请访问:\n{self.URL} \n或加入Q群: 922497356."
 
-        RegisterFileHandler()
+        RegisterQueueHandler()
+        StartLogListener()
 
         super().__init__(master_controller)
         self.controller = master_controller
@@ -84,6 +77,10 @@ class ConfigPanelApp(tk.Toplevel):
               self.karma_adjust_var.set('+' + valuestr)
         standardize_karma_input()
 
+        emu_path = self.emu_path_var.get()
+        emu_path = emu_path.replace("HD-Adb.exe", "HD-Player.exe")
+        self.emu_path_var.set(emu_path)
+
         for attr_name, var_type, var_config_name, _ in CONFIG_VAR_LIST:
             if issubclass(var_type, tk.Variable):
                 self.config[var_config_name] = getattr(self, attr_name).get()
@@ -92,7 +89,10 @@ class ConfigPanelApp(tk.Toplevel):
         else:
             self.config["_SPELLSKILLCONFIG"] = [s for s in ALL_SKILLS if s in list(set(self._spell_skill_config_internal))]
 
-        self.farm_target_var.set(DUNGEON_TARGETS[self.farm_target_text_var.get()])
+        if self.farm_target_text_var.get() in DUNGEON_TARGETS:
+            self.farm_target_var.set(DUNGEON_TARGETS[self.farm_target_text_var.get()])
+        else:
+            self.farm_target_var.set(None)
         
         SaveConfigToFile(self.config)
 
@@ -136,7 +136,7 @@ class ConfigPanelApp(tk.Toplevel):
         self.adb_status_label = ttk.Label(frame_row0)
         self.adb_status_label.grid(row=0, column=0,)
         # 隐藏的Entry用于存储变量
-        adb_entry = ttk.Entry(frame_row0, textvariable=self.adb_path_var)
+        adb_entry = ttk.Entry(frame_row0, textvariable=self.emu_path_var)
         adb_entry.grid_remove()
         def selectADB_PATH():
             path = filedialog.askopenfilename(
@@ -144,7 +144,7 @@ class ConfigPanelApp(tk.Toplevel):
                 filetypes=[("Executable", "*.exe"), ("All files", "*.*")]
             )
             if path:
-                self.adb_path_var.set(path)
+                self.emu_path_var.set(path)
                 self.save_config()
         # 浏览按钮
         self.adb_path_change_button = ttk.Button(
@@ -156,12 +156,12 @@ class ConfigPanelApp(tk.Toplevel):
         self.adb_path_change_button.grid(row=0,column=1)
         # 初始化标签状态
         def update_adb_status(*args):
-            if self.adb_path_var.get():
-                self.adb_status_label.config(text="已设定ADB", foreground="green")
+            if self.emu_path_var.get():
+                self.adb_status_label.config(text="已设置模拟器", foreground="green")
             else:
-                self.adb_status_label.config(text="未设定ADB", foreground="red")
+                self.adb_status_label.config(text="未设置模拟器", foreground="red")
         
-        self.adb_path_var.trace_add("write", lambda *args: update_adb_status())
+        self.emu_path_var.trace_add("write", lambda *args: update_adb_status())
         update_adb_status()  # 初始调用
         ttk.Label(frame_row0, text="端口:").grid(row=0, column=2, sticky=tk.W, pady=5)
         vcmd_non_neg = self.register(lambda x: ((x=="")or(x.isdigit())))

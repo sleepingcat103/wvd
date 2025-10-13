@@ -2,7 +2,7 @@ from gui import *
 import argparse
 from tg import bot as tg_bot
 
-__version__ = '1.5.5-beta1'
+__version__ = '1.8.11' 
 OWNER = "arnold2957"
 REPO = "wvd"
 
@@ -52,7 +52,7 @@ class AppController(tk.Tk):
     def check_queue(self):
         """处理来自AutoUpdater和其他服务的消息"""
         try:
-            Thread(target=tg_bot.get_latest_update).run()
+            # Thread(target=tg_bot.get_latest_update).run()
             
             message = self.msg_queue.get_nowait()
             command, value = message
@@ -60,17 +60,17 @@ class AppController(tk.Tk):
             # --- 这是处理更新逻辑的核心部分 ---
             match command:
                 case 'start_quest':
-                    tg_bot.send_message("启动任务...")
-                    logger.info('启动任务...')
+                    # tg_bot.send_message("启动任务...")
                     self.quest_setting = value                    
                     self.quest_setting._MSGQUEUE = self.msg_queue
                     self.quest_setting._FORCESTOPING = Event()
                     Farm = Factory()
                     self.quest_threading = Thread(target=Farm,args=(self.quest_setting,))
                     self.quest_threading.start()
+                    logger.info(f'启动任务\"{self.quest_setting._FARMTARGET_TEXT}\"...')
 
                 case 'stop_quest':
-                    tg_bot.send_message("停止任务...")
+                    # tg_bot.send_message("停止任务...")
                     logger.info('停止任务...')
                     if hasattr(self, 'quest_threading') and self.quest_threading.is_alive():
                         if hasattr(self.quest_setting, '_FORCESTOPING'):
@@ -79,6 +79,7 @@ class AppController(tk.Tk):
                 case 'turn_to_7000G':
                     logger.info('开始要钱...')
                     self.quest_setting._FARMTARGET = "7000G"
+                    self.quest_setting._COUNTERDUNG = 0
                     while 1:
                         if not self.quest_threading.is_alive():
                             Farm = Factory()
@@ -183,7 +184,8 @@ def main():
 
 def HeadlessActive(config_path, msg_queue):
     RegisterConsoleHandler()
-    RegisterFileHandler(with_timestamp=True)
+    RegisterQueueHandler()
+    StartLogListener()
 
     setting = FarmConfig()
     config = LoadConfigFromFile(config_path)
@@ -192,21 +194,21 @@ def HeadlessActive(config_path, msg_queue):
     msg_queue.put(('start_quest', setting))
     
     # 定義接收TG任務訊號
-    def check_pause_quest(tg_update): 
-        return tg_bot.check_message_and_chat_id(tg_update, '/farm_pause')
-    def check_continue_quest(tg_update): 
-        return tg_bot.check_message_and_chat_id(tg_update, '/farm_continue')
-    def fn_pause_quest():
-        tg_bot.send_message('嘗試停止任務')
-        logger.info('從電報收到信號暫停任務')
-        msg_queue.put(('stop_quest', None))
-    def fn_continue_quest():
-        tg_bot.send_message('嘗試啟動任務')
-        logger.info('從電報收到信號啟動任務')
-        msg_queue.put(('start_quest', setting))
+    # def check_pause_quest(tg_update): 
+    #     return tg_bot.check_message_and_chat_id(tg_update, '/farm_pause')
+    # def check_continue_quest(tg_update): 
+    #     return tg_bot.check_message_and_chat_id(tg_update, '/farm_continue')
+    # def fn_pause_quest():
+    #     tg_bot.send_message('嘗試停止任務')
+    #     logger.info('從電報收到信號暫停任務')
+    #     msg_queue.put(('stop_quest', None))
+    # def fn_continue_quest():
+    #     tg_bot.send_message('嘗試啟動任務')
+    #     logger.info('從電報收到信號啟動任務')
+    #     msg_queue.put(('start_quest', setting))
         
-    tg_bot.add_message_handler(check_pause_quest, fn_pause_quest)
-    tg_bot.add_message_handler(check_continue_quest, fn_continue_quest)
+    # tg_bot.add_message_handler(check_pause_quest, fn_pause_quest)
+    # tg_bot.add_message_handler(check_continue_quest, fn_continue_quest)
 
     logger.info(f"WvDAS 巫术daphne自动刷怪 v{__version__} @德德Dellyla(B站)")
 

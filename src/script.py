@@ -1,5 +1,4 @@
 from ppadb.client import Client as AdbClient
-import numpy as np
 from win10toast import ToastNotifier
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
@@ -7,16 +6,18 @@ from enum import Enum
 from datetime import datetime
 import os
 import subprocess
-import socket
 from utils import *
 import random
+from threading import Thread,Event
 from pathlib import Path
+import numpy as np
+import copy
 from tg import bot as tg_bot
 
 CC_SKILLS = ["KANTIOS"]
 SECRET_AOE_SKILLS = ["SAoLABADIOS","SAoLAERLIK","SAoLAFOROS"]
 FULL_AOE_SKILLS = ["LAERLIK", "LAMIGAL","LAZELOS", "LACONES", "LAFOROS","LAHALITO", "LAFERU"]
-ROW_AOE_SKILLS = ["maerlik", "mahalito", "mamigal","mazelos","maferu", "macones","maforos"]
+ROW_AOE_SKILLS = ["maerlik", "mahalito", "mamigal","mazelos","maferu", "macones","maforos","mof"]
 PHYSICAL_SKILLS = ["FPS","tzalik","QS","PS","DTS","AP","AB","BCS","HA","FS","SB",]
 
 ALL_SKILLS = CC_SKILLS + SECRET_AOE_SKILLS + FULL_AOE_SKILLS + ROW_AOE_SKILLS +  PHYSICAL_SKILLS
@@ -38,7 +39,7 @@ CONFIG_VAR_LIST = [
             #var_name,                      type,          config_name,                  default_value
             ["farm_target_text_var",        tk.StringVar,  "_FARMTARGET_TEXT",           list(DUNGEON_TARGETS.keys())[0] if DUNGEON_TARGETS else ""],
             ["farm_target_var",             tk.StringVar,  "_FARMTARGET",                ""],
-            ["randomly_open_chest_var",     tk.BooleanVar, "_RANDOMLYOPENCHEST",         False],
+            ["randomly_open_chest_var",     tk.BooleanVar, "_SMARTDISARMCHEST",         False],
             ["who_will_open_it_var",        tk.IntVar,     "_WHOWILLOPENIT",             0],
             ["skip_recover_var",            tk.BooleanVar, "_SKIPCOMBATRECOVER",         False],
             ["skip_chest_recover_var",      tk.BooleanVar, "_SKIPCHESTRECOVER",          False],
@@ -48,7 +49,7 @@ CONFIG_VAR_LIST = [
             ["active_rest_var",             tk.BooleanVar, "_ACTIVE_REST",               True],
             ["rest_intervel_var",           tk.IntVar,     "_RESTINTERVEL",              0],
             ["karma_adjust_var",            tk.StringVar,  "_KARMAADJUST",               "+0"],
-            ["adb_path_var",                tk.StringVar,  "_ADBPATH",                   ""],
+            ["emu_path_var",                tk.StringVar,  "_EMUPATH",                   ""],
             ["adb_port_var",                tk.StringVar,  "_ADBPORT",                   5555],
             ["last_version",                tk.StringVar,  "LAST_VERSION",               ""],
             ["latest_version",              tk.StringVar,  "LATEST_VERSION",             None],
@@ -59,48 +60,55 @@ class FarmConfig:
     for attr_name, var_type, var_config_name, var_default_value in CONFIG_VAR_LIST:
         locals()[var_config_name] = var_default_value
     def __init__(self):
-        #### 统计信息
-        self._LAPTIME = 0
-        self._TOTALTIME = 0
-        self._COUNTERDUNG = 0
-        self._COUNTERCOMBAT = 0
-        self._COUNTERCHEST = 0
-        self._TIME_COMBAT= 0
-        self._TIME_COMBAT_TOTAL = 0
-        self._TIME_CHEST = 0
-        self._TIME_CHEST_TOTAL = 0
         #### 面板配置其他
         self._FORCESTOPING = None
         self._FINISHINGCALLBACK = None
         self._MSGQUEUE = None
-        #### 临时参数
-        self._MEET_CHEST_OR_COMBAT = False
-        self._ENOUGH_AOE = False
-        self._COMBATSPD = False
-        self._SUICIDE = False # 当有两个人死亡的时候(multipeopledead), 在战斗中尝试自杀.
-        self._MAXRETRYLIMIT = 20
         #### 底层接口
         self._ADBDEVICE = None
         self._FINISHINGCALLBACK = lambda: True
     def __getattr__(self, name):
         # 当访问不存在的属性时，抛出AttributeError
         raise AttributeError(f"FarmConfig对象没有属性'{name}'")
+class RuntimeContext:
+    #### 统计信息
+    _LAPTIME = 0
+    _TOTALTIME = 0
+    _COUNTERDUNG = 0
+    _COUNTERCOMBAT = 0
+    _COUNTERCHEST = 0
+    _TIME_COMBAT= 0
+    _TIME_COMBAT_TOTAL = 0
+    _TIME_CHEST = 0
+    _TIME_CHEST_TOTAL = 0
+    #### 其他临时参数
+    _MEET_CHEST_OR_COMBAT = False
+    _ENOUGH_AOE = False
+    _COMBATSPD = False
+    _SUICIDE = False # 当有两个人死亡的时候(multipeopledead), 在战斗中尝试自杀.
+    _MAXRETRYLIMIT = 20
+    _ACTIVESPELLSEQUENCE = None
+    _SHOULDAPPLYSPELLSEQUENCE = True
+    _ZOOMWORLDMAP = False
 class FarmQuest:
     _DUNGWAITTIMEOUT = 0
     _TARGETINFOLIST = None
     _EOT = None
     _preEOTcheck = None
     _SPECIALDIALOGOPTION = None
+    _SPECIALFORCESTOPINGSYMBOL = None
+    _SPELLSEQUENCE = None
     _TYPE = None
     def __getattr__(self, name):
         # 当访问不存在的属性时，抛出AttributeError
         raise AttributeError(f"FarmQuest对象没有属性'{name}'")
 class TargetInfo:
-    def __init__(self, target: str, swipeDir: list = None, roi=None):
+    def __init__(self, target: str, swipeDir: list = None, roi=None, activeSpellSequenceOverride = False):
         self.target = target
         self.swipeDir = swipeDir
         # 注意 roi校验需要target的值. 请严格保证roi在最后.
         self.roi = roi
+        self.activeSpellSequenceOverride = activeSpellSequenceOverride
     @property
     def swipeDir(self):
         return self._swipeDir
@@ -118,13 +126,13 @@ class TargetInfo:
                         [100,800,700,800],
                         ]
             case "左上":
-                value = [[100,100,700,1200]]
+                value = [[100,250,700,1200]]
             case "右上":
-                value = [[700,100,100,1200]]
+                value = [[700,250,100,1200]]
             case "右下":
-                value = [[700,1200,100,100]]
+                value = [[700,1200,100,250]]
             case "左下":
-                value = [[100,1200,700,100]]
+                value = [[100,1200,700,250]]
             case _:
                 value = inputValue
         
@@ -146,73 +154,88 @@ class TargetInfo:
         self._roi = value
 
 ##################################################################
-
-def StartAdbServer(setting: FarmConfig):
-    def check_adb_connection():
-        try:
-            # 创建socket检测端口连接
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)  # 设置超时时间
-            result = sock.connect_ex(("127.0.0.1", 5037))
-            return result == 0  # 返回0表示连接成功
-        except Exception as e:
-            logger.info(f"连接检测异常: {str(e)}")
-            return False
-        finally:
-            sock.close()
+def KillAdb(setting : FarmConfig):
+    adb_path = GetADBPath(setting)
     try:
-        if not check_adb_connection():
-            logger.info(f"开始启动ADB服务, 路径:{setting._ADBPATH}")
-            # 启动adb服务（非阻塞模式）
-            subprocess.Popen(
-                [setting._ADBPATH, "start-server"],
+        logger.info(f"正在检查并关闭adb...")
+        # Windows 系统使用 taskkill 命令
+        if os.name == 'nt':
+            subprocess.run(
+                f"taskkill /f /im adb.exe", 
+                shell=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                shell=False
+                check=False  # 不检查命令是否成功（进程可能不存在）
             )
-            logger.info("ADB 服务启动中...")
-
-            # 循环检测连接（最多重试5次）
-            for _ in range(5):
-                if check_adb_connection():
-                    logger.info("ADB 连接成功")
-                    return True
-                time.sleep(1)  # 每次检测间隔1秒
-
-            logger.info("ADB 连接超时")
-            return False
+            time.sleep(1)
+            subprocess.run(
+                f"taskkill /f /im HD-Adb.exe", 
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False  # 不检查命令是否成功（进程可能不存在）
+            )
         else:
-            return True
+            subprocess.run(
+                f"pkill -f {adb_path}", 
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False
+            )
+        logger.info(f"已尝试终止adb")
     except Exception as e:
-        logger.info(f"启动ADB失败: {str(e)}")
-        return False
-def CreateAdbDevice(setting: FarmConfig):
-    client = AdbClient(host="127.0.0.1", port=5037)
+        logger.error(f"终止模拟器进程时出错: {str(e)}")
+    
+def KillEmulator(setting : FarmConfig):
+    emulator_name = os.path.basename(setting._EMUPATH)
+    emulator_headless = "MuMuVMMHeadless.exe"
+    try:
+        logger.info(f"正在检查并关闭已运行的模拟器实例{emulator_name}...")
+        # Windows 系统使用 taskkill 命令
+        if os.name == 'nt':
+            subprocess.run(
+                f"taskkill /f /im {emulator_name}", 
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False  # 不检查命令是否成功（进程可能不存在）
+            )
+            time.sleep(1)
+            subprocess.run(
+                f"taskkill /f /im {emulator_headless}", 
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False  # 不检查命令是否成功（进程可能不存在）
+            )
+            time.sleep(1)
 
-    target_device = f"127.0.0.1:{setting._ADBPORT}"
-    connected_devices = [d.serial for d in client.devices()]
-    if target_device in connected_devices:
-        # 设备已连接时才断开
-        client.remote_disconnect("127.0.0.1", int(setting._ADBPORT))
-        time.sleep(0.5)
-
-    logger.info(f"尝试创建adb连接 127.0.0.1:{setting._ADBPORT}...")
-    client.remote_connect("127.0.0.1", int(setting._ADBPORT))
-    devices = client.devices()
-    if (not devices) or not (devices[0]):
-        logger.info("创建adb链接失败.尝试启动模拟器.")
-        if StartEmulator(setting):
-            return CreateAdbDevice(setting)
+        # Unix/Linux 系统使用 pkill 命令
         else:
-            return
-    return devices[0]
-
+            subprocess.run(
+                f"pkill -f {emulator_name}", 
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False
+            )
+            subprocess.run(
+                f"pkill -f {emulator_headless}", 
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False
+            )
+        logger.info(f"已尝试终止模拟器进程: {emulator_name}")
+    except Exception as e:
+        logger.error(f"终止模拟器进程时出错: {str(e)}")
 def StartEmulator(setting):
-    hd_player_path = setting._ADBPATH.replace("HD-Adb.exe", "HD-Player.exe")
+    hd_player_path = setting._EMUPATH
     if not os.path.exists(hd_player_path):
         logger.error(f"模拟器启动程序不存在: {hd_player_path}")
         return False
-    
+
     try:
         logger.info(f"启动模拟器: {hd_player_path}")
         subprocess.Popen(
@@ -227,16 +250,100 @@ def StartEmulator(setting):
     
     logger.info("等待模拟器启动...")
     time.sleep(15)
+def GetADBPath(setting):
+    adb_path = setting._EMUPATH
+    adb_path = adb_path.replace("HD-Player.exe", "HD-Adb.exe") # 蓝叠
+    adb_path = adb_path.replace("MuMuPlayer.exe", "adb.exe") # mumu
+    adb_path = adb_path.replace("MuMuNxDevice.exe", "adb.exe") # mumu
+    if not os.path.exists(adb_path):
+        logger.error(f"adb程序序不存在: {adb_path}")
+        return None
+    
+    return adb_path
+
+def CMDLine(cmd):
+    logger.debug(f"cmd line: {cmd}")
+    return subprocess.run(cmd,shell=True, capture_output=True, text=True, timeout=10,encoding='utf-8')
+
+def CheckRestartConnectADB(setting: FarmConfig):
+    MAXRETRIES = 20
+
+    adb_path = GetADBPath(setting)
+
+    KillAdb(setting)
+
+    for attempt in range(MAXRETRIES):
+        logger.info(f"-----------------------\n开始尝试连接adb. 次数:{attempt + 1}/{MAXRETRIES}...")
+
+        try:
+            logger.info("检查adb服务...")
+            result = CMDLine(f"\"{adb_path}\" devices")
+            logger.debug(f"adb链接返回(输出信息):{result.stdout}")
+            logger.debug(f"adb链接返回(错误信息):{result.stderr}")
+            
+            if ("daemon not running" in result.stderr) or ("offline" in result.stdout):
+                logger.info("adb服务未启动!\n启动adb服务...")
+                CMDLine(f"\"{adb_path}\" kill-server")
+                CMDLine(f"\"{adb_path}\" start-server")
+                time.sleep(2)
+
+            logger.debug(f"尝试连接到adb...")
+            result = CMDLine(f"\"{adb_path}\" connect 127.0.0.1:{setting._ADBPORT}")
+            logger.debug(f"adb链接返回(输出信息):{result.stdout}")
+            logger.debug(f"adb链接返回(错误信息):{result.stderr}")
+            
+            if result.returncode == 0 and ("connected" in result.stdout or "already" in result.stdout):
+                logger.info("成功连接到模拟器")
+                break
+            if ("refused" in result.stderr) or ("cannot connect" in result.stdout):
+                logger.info("模拟器未运行，尝试启动...")
+                StartEmulator(setting)
+                logger.info("模拟器(应该)启动完毕.")
+                logger.info("尝试连接到模拟器...")
+                result = CMDLine(f"\"{adb_path}\" connect 127.0.0.1:{setting._ADBPORT}")
+                if result.returncode == 0 and ("connected" in result.stdout or "already" in result.stdout):
+                    logger.info("成功连接到模拟器")
+                    break
+                logger.info("无法连接. 检查adb端口.")
+                continue
+
+            logger.info(f"连接失败: {result.stderr.strip()}")
+            time.sleep(2)
+            KillEmulator(setting)
+            KillAdb(setting)
+            time.sleep(2)
+        except Exception as e:
+            logger.error(f"重启ADB服务时出错: {e}")
+            return None
+    else:
+        logger.info("达到最大重试次数，连接失败")
+        return None
+
+    try:
+        client = AdbClient(host="127.0.0.1", port=5037)
+        devices = client.devices()
+        
+        # 查找匹配的设备
+        target_device = f"127.0.0.1:{setting._ADBPORT}"
+        for device in devices:
+            if device.serial == target_device:
+                logger.info(f"成功获取设备对象: {device.serial}")
+                return device
+    except Exception as e:
+        logger.error(f"获取ADB设备时出错: {e}")
+    
+    return None
+
+##################################################################
 
 def Factory():
     toaster = ToastNotifier()
     setting =  None
     quest = None
+    runtimeContext = None
     def LoadQuest(farmtarget):
         # 构建文件路径
         data = LoadJson(ResourcePath(QUEST_FILE))[setting._FARMTARGET]
-        
-
         
         # 创建 Quest 实例并填充属性
         quest = FarmQuest()
@@ -258,24 +365,52 @@ def Factory():
                     logger.info(f"Warning: Config has no attribute '{key}' to override")
         return quest
     ##################################################################
+    def ResetADBDevice():
+        nonlocal setting # 修改device
+        if device := CheckRestartConnectADB(setting):
+            setting._ADBDEVICE = device
+            logger.info("ADB服务成功启动，设备已连接.")
     def DeviceShell(cmdStr):
         while True:
-            try:
-                return setting._ADBDEVICE.shell(cmdStr)
-            except Exception as e:
-                logger.debug(f"{e}")
-                if isinstance(e, (RuntimeError, ConnectionResetError, cv2.error)):
-                    logger.debug(f"ADB操作失败.")
-                    logger.info("ADB连接异常，尝试重启服务...")
-
-                    while True:
-                        if StartAdbServer(setting):
-                            if device := CreateAdbDevice(setting):
-                                setting._ADBDEVICE = device
-                                logger.info("ADB服务重启成功，设备重新连接")
-                                break
-                        logger.warning("ADB重启失败，5秒后重试...")
-                        time.sleep(5)
+            # 使用共享变量存储结果
+            exception = None
+            result = None
+            completed = Event()
+            
+            def adb_command_thread():
+                nonlocal exception,result
+                try:
+                    result = setting._ADBDEVICE.shell(cmdStr, timeout=5)
+                except Exception as e:
+                    exception = e
+                finally:
+                    completed.set()
+            
+            # 创建并启动线程
+            thread = Thread(target=adb_command_thread)
+            thread.daemon = True
+            thread.start()
+            
+            # 等待线程完成，设置总超时时间
+            completed.wait(timeout=7)  # 比ADB命令超时稍长
+            
+            if not completed.is_set():
+                # 线程超时未完成
+                logger.debug("外部检测: ADB命令执行超时")
+                exception = TimeoutError("外部检测: ADB命令执行超时")
+            
+            if exception is None:
+                return result
+            
+            # 处理异常情况
+            logger.debug(f"{exception}")
+            if isinstance(exception, (RuntimeError, ConnectionResetError, TimeoutError, cv2.error)):
+                logger.debug(f"ADB操作失败. {exception}")
+                logger.info(f"ADB异常({type(exception).__name__})，尝试重启服务...")
+                ResetADBDevice()
+            else:
+                raise exception  # 非预期异常直接抛出
+    
     def Sleep(t=1):
         time.sleep(t)
     def ScreenShot():
@@ -310,15 +445,7 @@ def Factory():
                 logger.debug(f"{e}")
                 if isinstance(e, (AttributeError,RuntimeError, ConnectionResetError, cv2.error)):
                     logger.info("adb重启中...")
-                    while True:
-                        if StartAdbServer(setting):
-                            if device := CreateAdbDevice(setting):
-                                setting._ADBDEVICE = device
-                                logger.info("ADB服务重启成功，设备重新连接")
-                                break
-                        logger.warning("ADB重启失败，5秒后重试...")
-                        time.sleep(5)
-                    continue
+                    ResetADBDevice()
     def CheckIf(screenImage, shortPathOfTarget, roi = None, outputMatchResult = False):
         def cutRoI(screenshot,roi):
             if roi is None:
@@ -361,14 +488,29 @@ def Factory():
             # cv2.imwrite(f'cutRoI_{time.time()}.png', screenshot)
             return screenshot
 
-        nonlocal setting
         template = LoadTemplateImage(shortPathOfTarget)
         screenshot = screenImage
         threshold = 0.80
         pos = None
         search_area = cutRoI(screenshot, roi)
-        result = cv2.matchTemplate(search_area, template, cv2.TM_CCOEFF_NORMED)
+        try:
+            result = cv2.matchTemplate(search_area, template, cv2.TM_CCOEFF_NORMED)
+        except Exception as e:
+                logger.error(f"{e}")
+                logger.info(f"{e}")
+                if isinstance(e, (cv2.error)):
+                    logger.info(f"cv2异常.")
+                    # timestamp = datetime.now().strftime("cv2_%Y%m%d_%H%M%S")  # 格式：20230825_153045
+                    # file_path = os.path.join(LOGS_FOLDER_NAME, f"{timestamp}.png")
+                    # cv2.imwrite(file_path, ScreenShot())
+                    return None
+
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+        if outputMatchResult:
+            cv2.imwrite("origin.png", screenshot)
+            cv2.rectangle(screenshot, max_loc, (max_loc[0] + template.shape[1], max_loc[1] + template.shape[0]), (0, 255, 0), 2)
+            cv2.imwrite("matched.png", screenshot)
 
         logger.debug(f"搜索到疑似{shortPathOfTarget}, 匹配程度:{max_val*100:.2f}%")
         if max_val < threshold:
@@ -378,10 +520,6 @@ def Factory():
             logger.debug(f"警告: {shortPathOfTarget}的匹配程度超过了{threshold*100:.0f}%但不足90%")
 
         pos=[max_loc[0] + template.shape[1]//2, max_loc[1] + template.shape[0]//2]
-
-        if outputMatchResult:
-            cv2.rectangle(screenshot, max_loc, (max_loc[0] + template.shape[1], max_loc[1] + template.shape[0]), (0, 255, 0), 2)
-            cv2.imwrite("Matched Result.png", screenshot)
         return pos
     def CheckIf_MultiRect(screenImage, shortPathOfTarget):
         template = LoadTemplateImage(shortPathOfTarget)
@@ -507,11 +645,14 @@ def Factory():
     def PressReturn():
         logger.debug("按了返回.")
         DeviceShell('input keyevent KEYCODE_BACK')
+    def WrapImage(image,r,g,b):
+        scn_b = image * np.array([b, g, r])
+        return np.clip(scn_b, 0, 255).astype(np.uint8)
     ##################################################################
     def FindCoordsOrElseExecuteFallbackAndWait(targetPattern, fallback,waitTime):
         # fallback可以是坐标[x,y]或者字符串. 当为字符串的时候, 视为图片地址
         while True:
-            for _ in range(setting._MAXRETRYLIMIT):
+            for _ in range(runtimeContext._MAXRETRYLIMIT):
                 if setting._FORCESTOPING.is_set():
                     return None
                 scn = ScreenShot()
@@ -525,7 +666,7 @@ def Factory():
                     if pos:
                         return pos # FindCoords
                 # OrElse
-                if Press(CheckIf(scn,'retry')):
+                if Press(CheckIf(scn,'retry')) or Press(CheckIf(scn,'retry_blank')):
                     logger.info("发现并点击了\"重试\". 你遇到了网络波动.")
                     Sleep(1)
                     continue
@@ -548,7 +689,10 @@ def Factory():
                                 if isinstance(p, str):
                                     pressTarget(p)
                                 elif isinstance(p, (list, tuple)) and len(p) == 2:
+                                    t = time.time()
                                     Press(p)
+                                    if (waittime:=(time.time()-t)) < 0.1:
+                                        Sleep(0.1-waittime)
                                 else:
                                     logger.debug(f"错误: 非法的目标{p}.")
                                     setting._FORCESTOPING.set()
@@ -562,20 +706,21 @@ def Factory():
                             return None
                 Sleep(waitTime) # and wait
 
-            logger.info(f"{setting._MAXRETRYLIMIT}次截图依旧没有找到目标{targetPattern}, 疑似卡死. 重启游戏.")
+            logger.info(f"{runtimeContext._MAXRETRYLIMIT}次截图依旧没有找到目标{targetPattern}, 疑似卡死. 重启游戏.")
             Sleep()
             restartGame()
             return None # restartGame会抛出异常 所以直接返回none就行了
     def restartGame(skipScreenShot = False):
-        nonlocal setting
-        setting._COMBATSPD = False # 重启会重置2倍速, 所以重置标识符以便重新打开.
-        setting._MAXRETRYLIMIT = min(50, setting._MAXRETRYLIMIT + 5) # 每次重启后都会增加5次尝试次数, 以避免不同电脑导致的反复重启问题.
-        setting._TIME_CHEST = 0
-        setting._TIME_COMBAT = 0 # 因为重启了, 所以清空战斗和宝箱计时器.
+        nonlocal runtimeContext
+        runtimeContext._COMBATSPD = False # 重启会重置2倍速, 所以重置标识符以便重新打开.
+        runtimeContext._MAXRETRYLIMIT = min(50, runtimeContext._MAXRETRYLIMIT + 5) # 每次重启后都会增加5次尝试次数, 以避免不同电脑导致的反复重启问题.
+        runtimeContext._TIME_CHEST = 0
+        runtimeContext._TIME_COMBAT = 0 # 因为重启了, 所以清空战斗和宝箱计时器.
+        runtimeContext._ZOOMWORLDMAP = False
 
         if not skipScreenShot:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 格式：20230825_153045
-            file_path = os.path.join("screenshotwhenrestart", f"{timestamp}.png")
+            file_path = os.path.join(LOGS_FOLDER_NAME, f"{timestamp}.png")
             cv2.imwrite(file_path, ScreenShot())
             logger.info(f"重启前截图已保存在{file_path}中.")
         else:
@@ -737,7 +882,7 @@ def Factory():
                 if waittime > 0.270 :
                     logger.debug(f"预计等待 {waittime}")
                     Sleep(waittime-0.270)
-                    DeviceShell(f"input tap 450 900") # 这里和retry重合 可以按.
+                    DeviceShell(f"input tap 527 920") # 这里和retry重合, 也和to_title+retry重合.
                     Sleep(3)
                 else:
                     logger.debug(f"等待时间过短: {waittime}")
@@ -757,7 +902,33 @@ def Factory():
         Combat = 'combat'
         Quit = 'quit'
 
+    def IntoWorldMapAndZoom():
+        nonlocal runtimeContext
+        Press(FindCoordsOrElseExecuteFallbackAndWait('intoWorldMap',['closePartyInfo','closePartyInfo_fortress',[1,1]],1))
+        Sleep(0.5)
+        FindCoordsOrElseExecuteFallbackAndWait('worldmapflag','intoWorldMap',1)
+        Sleep(0.5)
+        if not runtimeContext._ZOOMWORLDMAP:
+            for _ in range(3):
+                Press([100,1500])
+                Sleep(0.5)
+            Press([250,1500])
+            runtimeContext._ZOOMWORLDMAP = True
+        pass
+    def RiseAgainReset(reason):
+        nonlocal runtimeContext
+        runtimeContext._SUICIDE = False # 死了 自杀成功 设置为false
+        runtimeContext._SHOULDAPPLYSPELLSEQUENCE = True # 死了 序列失效, 应当重置序列.
+        if reason == 'chest':
+            runtimeContext._COUNTERCHEST -=1
+        else:
+            runtimeContext._COUNTERCOMBAT -=1
+        logger.info("快快请起.")
+        # logger.info("REZ.")
+        Press([450,750])
+        Sleep(10)
     def IdentifyState():
+        nonlocal setting # 修改因果
         counter = 0
         while 1:
             screen = ScreenShot()
@@ -766,18 +937,18 @@ def Factory():
             if setting._FORCESTOPING.is_set():
                 return State.Quit, DungeonState.Quit, screen
 
-            if Press(CheckIf(screen,'retry')):
+            if Press(CheckIf(screen,'retry')) or Press(CheckIf(screen,'retry_blank')):
                     logger.info("发现并点击了\"重试\". 你遇到了网络波动.")
                     # logger.info("ka le.")
                     Sleep(2)
 
             identifyConfig = [
                 ('combatActive',  DungeonState.Combat),
+                ('combatActive_2',DungeonState.Combat),
                 ('dungFlag',      DungeonState.Dungeon),
                 ('chestFlag',     DungeonState.Chest),
                 ('whowillopenit', DungeonState.Chest),
                 ('mapFlag',       DungeonState.Map),
-                ('combatActive_2',DungeonState.Combat),
                 ]
             for pattern, state in identifyConfig:
                 if CheckIf(screen, pattern):
@@ -816,19 +987,27 @@ def Factory():
             if (CheckIf(screen,'Inn')):
                 return State.Inn, None, screen
 
+            if quest._SPECIALFORCESTOPINGSYMBOL != None:
+                for symbol in quest._SPECIALFORCESTOPINGSYMBOL:
+                        if CheckIf(screen,symbol):
+                            return State.Quit,DungeonState.Quit,screen
+
             if counter>=4:
                 logger.info("看起来遇到了一些不太寻常的情况...")
                 if quest._SPECIALDIALOGOPTION != None:
                     for option in quest._SPECIALDIALOGOPTION:
-                        if Press(CheckIf(ScreenShot(),option)):
+                        if Press(CheckIf(screen,option)):
                             return IdentifyState()
                 if (CheckIf(screen,'RiseAgain')):
-                    setting._SUICIDE = False # 死了 自杀成功 设置为false
-                    tg_bot.send_message("死了一次, 快快请起")
-                    logger.info("快快请起.")
-                    # logger.info("REZ.")
-                    Press([450,750])
-                    Sleep(10)
+                    RiseAgainReset(reason = 'combat')
+                    return IdentifyState()
+                if CheckIf(screen, 'worldmapflag'):
+                    for _ in range(3):
+                        Press([100,1500])
+                        Sleep(0.5)
+                    Press([250,1500])
+                    # 这里不需要continue或者递归 直接继续进行就行
+                if Press(CheckIf(screen, 'sandman_recover')):
                     return IdentifyState()
                 if (CheckIf(screen,'cursedWheel_timeLeap')):
                     tg_bot.send_message("死到不行，開始跟王女要錢")
@@ -868,6 +1047,8 @@ def Factory():
                         logger.info("积善行德!")
                         # logger.info("")
                         Sleep(2)
+                if Press(CheckIf(screen,'strange_things')):
+                    Sleep(2)
                 if Press(CheckIf(screen,'blessing')):
                     logger.info("我要选安戈拉的祝福!...好吧随便选一个吧.")
                     # logger.info("Blessing of... of course Angora! Fine, anything.")
@@ -897,7 +1078,7 @@ def Factory():
                     # logger.info("")
                     Sleep(2)
                 if (CheckIf(screen,'multipeopledead')):
-                    setting._SUICIDE = True # 准备尝试自杀
+                    runtimeContext._SUICIDE = True # 准备尝试自杀
                     logger.info("死了好几个, 惨哦")
                     # logger.info("Corpses strew the screen")
                     Press(CheckIf(screen,'skull'))
@@ -911,6 +1092,7 @@ def Factory():
                     logger.info("网络故障警报! 网络故障警报! 返回标题, 重复, 返回标题!")
                     return IdentifyState()
                 PressReturn()
+                Sleep(0.5)
                 PressReturn()
             if counter>15:
                 black = LoadTemplateImage("blackScreen")
@@ -925,12 +1107,16 @@ def Factory():
                 counter = 0
 
             Press([1,1])
+            Sleep(0.25)
             Press([1,1])
+            Sleep(0.25)
             Press([1,1])
             Sleep(1)
             counter += 1
         return None, None, screen
     def GameFrozenCheck(queue, scn):
+        if scn is None:
+            raise ValueError("GameFrozenCheck被传入了一个空值.")
         logger.info("卡死检测截图")
         LENGTH = 10
         if len(queue) > LENGTH:
@@ -958,71 +1144,115 @@ def Factory():
             if Press(CheckIf(ScreenShot(),quest._preEOTcheck)):
                 pass
         for info in quest._EOT:
-            pos = FindCoordsOrElseExecuteFallbackAndWait(info[1],info[2],info[3])
-            if info[0]=="press":
-                Press(pos)
+            if info[1]=="intoWorldMap":
+                IntoWorldMapAndZoom()
+            else:
+                pos = FindCoordsOrElseExecuteFallbackAndWait(info[1],info[2],info[3])
+                if info[0]=="press":
+                    Press(pos)
         Sleep(1)
         Press(CheckIf(ScreenShot(), 'GotoDung'))
     def StateCombat():
-        nonlocal setting
-        if setting._TIME_COMBAT==0:
-            setting._TIME_COMBAT = time.time()
+        def doubleConfirmCastSpell():
+            is_success_aoe = False
+            Sleep(1)
+            scn = ScreenShot()
+            if Press(CheckIf(scn,'OK')):
+                is_success_aoe = True
+                Sleep(2)
+                scn = ScreenShot()
+                if CheckIf(scn,'notenoughsp') or CheckIf(scn,'notenoughmp'):
+                    Press(CheckIf(scn,'notenough_close'))
+                    Press(CheckIf(ScreenShot(),'spellskill/lv1'))
+                    Press(CheckIf(scn,'OK'))
+                    Sleep(1)
+            elif pos:=(CheckIf(scn,'next')):
+                Press([pos[0]-15+random.randint(0,30),pos[1]+150+random.randint(0,30)])
+                Sleep(1)
+                scn = ScreenShot()
+                if CheckIf(scn,'notenoughsp') or CheckIf(scn,'notenoughmp'):
+                    Press(CheckIf(scn,'notenough_close'))
+                    Press(CheckIf(ScreenShot(),'spellskill/lv1'))
+                    Press([pos[0]-15+random.randint(0,30),pos[1]+150+random.randint(0,30)])
+                    Sleep(1)
+            else:
+                Press([150,750])
+                Sleep(0.1)
+                Press([300,750])
+                Sleep(0.1)
+                Press([450,750])
+                Sleep(0.1)
+                Press([550,750])
+                Sleep(0.1)
+                Press([650,750])
+                Sleep(0.1)
+                Press([750,750])
+                Sleep(0.1)
+                Sleep(2)
+            Sleep(1)
+            return (is_success_aoe)
+
+        nonlocal runtimeContext
+        if runtimeContext._TIME_COMBAT==0:
+            runtimeContext._TIME_COMBAT = time.time()
 
         screen = ScreenShot()
-        if not setting._COMBATSPD:
+        if not runtimeContext._COMBATSPD:
             if Press(CheckIf(screen,'combatSpd')):
-                setting._COMBATSPD = True
+                runtimeContext._COMBATSPD = True
+                Sleep(1)
 
-        if setting._SYSTEMAUTOCOMBAT:
-            Press(CheckIf(screen,'combatAuto'))
-            Sleep(5)
-            return
+        spellsequence = runtimeContext._ACTIVESPELLSEQUENCE
+        if spellsequence != None:
+            logger.info(f"当前施法序列:{spellsequence}")
+            for k in spellsequence.keys():
+                if CheckIf(screen,'spellskill/'+ k):
+                    targetSpell = 'spellskill/'+ spellsequence[k][0]
+                    if not CheckIf(screen, targetSpell):
+                        logger.error("错误:施法序列包含不可用的技能")
+                        Press([850,1100])
+                        Sleep(0.5)
+                        Press([850,1100])
+                        Sleep(3)
+                        return
+                    
+                    logger.info(f"使用技能{targetSpell}, 施法序列特征: {k}:{spellsequence[k]}")
+                    if len(spellsequence[k])!=1:
+                        spellsequence[k].pop(0)
+                    Press(CheckIf(screen,targetSpell))
+                    if targetSpell != 'spellskill/' + 'defend':
+                        doubleConfirmCastSpell()
 
-        if setting._ENOUGH_AOE and setting._AUTO_AFTER_AOE:
-            Press(CheckIf(screen,'combatAuto'))
+                    return
+
+        if (setting._SYSTEMAUTOCOMBAT) or (runtimeContext._ENOUGH_AOE and setting._AUTO_AFTER_AOE):
+            Press(CheckIf(WrapImage(screen,0,0.5,0.7),'combatAuto'))
             Sleep(5)
             return
 
         if not CheckIf(screen,'flee'):
             return
-        if setting._SUICIDE:
-            Press(CheckIf(screen,'defend'))
+        if runtimeContext._SUICIDE:
+            Press(CheckIf(screen,'spellskill/'+'defend'))
         else:
             castSpellSkill = False
+            castAndPressOK = False
             for skillspell in setting._SPELLSKILLCONFIG:
-                if setting._ENOUGH_AOE and ((skillspell in SECRET_AOE_SKILLS) or (skillspell in FULL_AOE_SKILLS)):
+                if runtimeContext._ENOUGH_AOE and ((skillspell in SECRET_AOE_SKILLS) or (skillspell in FULL_AOE_SKILLS)):
                     #logger.info(f"本次战斗已经释放全体aoe, 由于面板配置, 不进行更多的技能释放.")
                     continue
                 elif Press((CheckIf(screen, 'spellskill/'+skillspell))):
                     logger.info(f"使用技能 {skillspell}")
-                    Sleep(1)
-                    scn = ScreenShot()
-                    if Press(CheckIf(scn,'OK')):
-                        Sleep(2)
-                    elif pos:=(CheckIf(scn,'next')):
-                        Press([pos[0]-15+random.randint(0,30),pos[1]+150+random.randint(0,30)])
-                        Sleep(1)
-                        if CheckIf(ScreenShot(),'notenoughsp'):
-                            PressReturn()
-                            Press(CheckIf(ScreenShot(),'spellskill/lv1'))
-                            Press([pos[0]-15+random.randint(0,30),pos[1]+150+random.randint(0,30)])
-                            Sleep(1)
-                    else:
-                        Press([150,750])
-                        Press([300,750])
-                        Press([450,750])
-                        Press([550,750])
-                        Press([650,750])
-                        Press([750,750])
-                        Sleep(2)
-                    Sleep(1)
+                    castAndPressOK = doubleConfirmCastSpell()
                     castSpellSkill = True
-                    if setting._AOE_ONCE and ((skillspell in SECRET_AOE_SKILLS) or (skillspell in FULL_AOE_SKILLS)):
-                        setting._ENOUGH_AOE = True
+                    if castAndPressOK and setting._AOE_ONCE and ((skillspell in SECRET_AOE_SKILLS) or (skillspell in FULL_AOE_SKILLS)):
+                        runtimeContext._ENOUGH_AOE = True
                         logger.info(f"已经释放了首次全体aoe.")
                     break
             if not castSpellSkill:
+                Press(CheckIf(ScreenShot(),'combatClose'))
                 Press([850,1100])
+                Sleep(0.5)
                 Press([850,1100])
                 Sleep(3)
     def StateMap_FindSwipeClick(targetInfo : TargetInfo):
@@ -1057,8 +1287,9 @@ def Factory():
                         logger.debug(f"宝箱热力图: 地图:{setting._FARMTARGET} 方向:{swipeDir} 位置:{targetPos}")
                     if not roi:
                         # 如果没有指定roi 我们使用二次确认
-                        logger.debug(f"拖动: {targetPos[0]},{targetPos[1]} -> 450,800")
-                        DeviceShell(f"input swipe {targetPos[0]} {targetPos[1]} {(targetPos[0]+450)//2} {(targetPos[1]+800)//2}")
+                        # logger.debug(f"拖动: {targetPos[0]},{targetPos[1]} -> 450,800")
+                        # DeviceShell(f"input swipe {targetPos[0]} {targetPos[1]} {(targetPos[0]+450)//2} {(targetPos[1]+800)//2}")
+                        # 二次确认也不拖动了 太容易触发bug
                         Sleep(2)
                         Press([1,1255])
                         targetPos = CheckIf(ScreenShot(),target,roi)
@@ -1073,7 +1304,7 @@ def Factory():
             _, dungState,screen = IdentifyState()
             if dungState == DungeonState.Map:
                 logger.info(f"开始移动失败. 不要停下来啊面具男!")
-                FindCoordsOrElseExecuteFallbackAndWait("dungFlag",([280,1433],[1,1]),1)
+                FindCoordsOrElseExecuteFallbackAndWait("dungFlag",[[280,1433],[1,1]],1)
                 dungState = dungState.Dungeon
                 break
             if dungState != DungeonState.Dungeon:
@@ -1104,6 +1335,9 @@ def Factory():
         except KeyError as e:
             logger.info(f"错误: {e}") # 一般来说这里只会返回"地图不可用"
             return None,  targetInfoList
+    
+        if not CheckIf(map,'mapFlag'):
+                return None,targetInfoList # 发生了错误, 应该是进战斗了
 
         if searchResult == None:
             if target == 'chest':
@@ -1141,6 +1375,7 @@ def Factory():
                         logger.info("经过对比中心区域, 判断为抵达目标地点.")
                         logger.info('开始等待...等待...')
                         PressReturn()
+                        Sleep(0.5)
                         PressReturn()
                         while 1:
                             if setting._DUNGWAITTIMEOUT-time.time()+waitTimer<0:
@@ -1150,56 +1385,69 @@ def Factory():
                                 Press([777,150])
                                 return None,  targetInfoList
                             logger.info(f'还需要等待{setting._DUNGWAITTIMEOUT-time.time()+waitTimer}秒.')
-                            if CheckIf(ScreenShot(),'combatActive'):
+                            if CheckIf(ScreenShot(),'combatActive') or CheckIf(ScreenShot(),'combatActive_2'):
                                 return DungeonState.Combat,targetInfoList
         return DungeonState.Map,  targetInfoList
     def StateChest():
-        nonlocal setting
-        if setting._TIME_CHEST==0:
-            setting._TIME_CHEST = time.time()
-        FindCoordsOrElseExecuteFallbackAndWait('whowillopenit', ['chestFlag',[1,1]],1)
-        tryOpenCounter = 0
-        MAXTRYOPEN = 2
-        MAXERROROPEN = 50
+        nonlocal runtimeContext
+        availableChar = [0, 1, 2, 3, 4, 5]
+        disarm = [515,934]  # 527,920会按到接受死亡 450 1000会按到技能 445,1050还是会按到技能
+        haveBeenTried = False
+
+        if runtimeContext._TIME_CHEST==0:
+            runtimeContext._TIME_CHEST = time.time()
+
         while 1:
+            FindCoordsOrElseExecuteFallbackAndWait(
+                ['dungFlag','combatActive', 'combatActive_2','chestOpening','whowillopenit','RiseAgain'],
+                [[1,1],[1,1],'chestFlag'],
+                1)
             scn = ScreenShot()
-            Press(CheckIf(scn,'chestFlag'))
+
             if CheckIf(scn,'whowillopenit'):
-                if (tryOpenCounter<=MAXTRYOPEN) and (setting._WHOWILLOPENIT != 0):
-                    whowillopenit = setting._WHOWILLOPENIT - 1 # 如果指定了人选且次数没超过尝试次数, 使用指定的序号
-                else:
-                    # 其他时候都使用随机
-                    others = [num for num in [1, 2, 3, 4, 5, 6] if num != setting._WHOWILLOPENIT] # setting._WHOWILLOPENIT可以等于0, 这种情况就是完全随机
-                    whowillopenit = random.choice(others) # 如果超过了尝试次数, 那么排除指定的人选后随机
-                Press([200+(whowillopenit%3)*200, 1200+((whowillopenit)//3)%2*150])
+                while 1:
+                    pointSomeone = setting._WHOWILLOPENIT - 1
+                    if (pointSomeone != -1) and (pointSomeone in availableChar) and (not haveBeenTried):
+                        whowillopenit = pointSomeone # 如果指定了一个角色并且该角色可用并且没尝试过, 使用它
+                    else:
+                        whowillopenit = random.choice(availableChar) # 否则从列表里随机选一个
+                    pos = [258+(whowillopenit%3)*258, 1161+((whowillopenit)//3)%2*184]
+                    # logger.info(f"{availableChar},{pos}")
+                    if CheckIf(scn,'chestfear',[[pos[0]-125,pos[1]-82,250,164]]):
+                        if whowillopenit in availableChar:
+                            availableChar.remove(whowillopenit) # 如果发现了恐惧, 删除这个角色.
+                    else:
+                        Press(pos)
+                        Sleep(1.5)
+                        if not setting._SMARTDISARMCHEST:
+                            for _ in range(8):
+                                t = time.time()
+                                Press(disarm)
+                                if time.time()-t<0.3:
+                                    Sleep(0.3-(time.time()-t))
+                                
+                        break
+                if not haveBeenTried:
+                    haveBeenTried = True
+
+            if CheckIf(scn,'chestOpening'):
                 Sleep(1)
-            Press([1,1])
-            if CheckIf(ScreenShot(),'chestOpening'):
-                Sleep(1)
-                if not setting._RANDOMLYOPENCHEST:
-                    FindCoordsOrElseExecuteFallbackAndWait(['dungFlag','combatActive'],[450,900],1)
-                    break
-                else:
-                    if CheckIf(ScreenShot(),'chestOpening'):
-                        ChestOpen()
+                if setting._SMARTDISARMCHEST:
+                    ChestOpen()
+                FindCoordsOrElseExecuteFallbackAndWait(
+                    ['dungFlag','combatActive','combatActive_2','chestFlag','RiseAgain'], # 如果这个fallback重启了, 战斗箱子会直接消失, 固有箱子会是chestFlag
+                    [disarm,disarm,disarm,disarm,disarm,disarm,disarm,disarm],
+                    1)
+            
+            if CheckIf(scn,'RiseAgain'):
+                RiseAgainReset(reason = 'chest')
                 return None
-            if CheckIf(ScreenShot(),'dungFlag'):
+            if CheckIf(scn,'dungFlag'):
                 return DungeonState.Dungeon
-            if CheckIf(ScreenShot(),'combatActive'):
+            if CheckIf(scn,'combatActive') or CheckIf(scn,'combatActive_2'):
                 return DungeonState.Combat
-            if Press(CheckIf(ScreenShot(),'retry')):
+            if Press(CheckIf(scn,'retry')) or Press(CheckIf(scn,'retry_blank')):
                 logger.info("发现并点击了\"重试\". 你遇到了网络波动.")
-                continue
-            tryOpenCounter += 1
-            logger.info(f"似乎选择人物失败了,当前已经尝次数:{tryOpenCounter}.")
-            if tryOpenCounter <=MAXTRYOPEN:
-                logger.info(f"尝试{MAXTRYOPEN}次后若失败则会变为随机开箱.")
-            else:
-                logger.info(f"随机开箱已经启用.")
-            if tryOpenCounter > MAXERROROPEN:
-                tg_bot.send_message(f"错误: 尝试開箱次数过多. 疑似卡死.")
-                logger.info(f"错误: 尝试次数过多. 疑似卡死.")
-                return None
     def StateDungeon(targetInfoList : list[TargetInfo]):
         gameFrozen_none = []
         gameFrozen_map = 0
@@ -1208,6 +1456,9 @@ def Factory():
         waitTimer = time.time()
         needRecoverBecauseCombat = False
         needRecoverBecauseChest = False
+        
+        nonlocal runtimeContext
+        runtimeContext._SHOULDAPPLYSPELLSEQUENCE = True
         while 1:
             logger.info("----------------------")
             if setting._FORCESTOPING.is_set():
@@ -1218,19 +1469,19 @@ def Factory():
             match dungState:
                 case None:
                     s, dungState,scn = IdentifyState()
-                    if (s == State.Inn)or(s == DungeonState.Quit):
+                    if (s == State.Inn) or (dungState == DungeonState.Quit):
                         break
                     gameFrozen_none, result = GameFrozenCheck(gameFrozen_none,scn)
                     if result:
                         tg_bot.send_message("由于画面卡死, 在state:None中重启.")
                         logger.info("由于画面卡死, 在state:None中重启.")
                         restartGame()
-                    MAXTIMEOUT = 300
-                    if (setting._TIME_CHEST != 0 ) and (time.time()-setting._TIME_CHEST > MAXTIMEOUT):
+                    MAXTIMEOUT = 400
+                    if (runtimeContext._TIME_CHEST != 0 ) and (time.time()-runtimeContext._TIME_CHEST > MAXTIMEOUT):
                         tg_bot.send_message("由于宝箱用时过久, 在state:None中重启.")
                         logger.info("由于宝箱用时过久, 在state:None中重启.")
                         restartGame()
-                    if (setting._TIME_COMBAT != 0) and (time.time()-setting._TIME_COMBAT > MAXTIMEOUT):
+                    if (runtimeContext._TIME_COMBAT != 0) and (time.time()-runtimeContext._TIME_COMBAT > MAXTIMEOUT):
                         tg_bot.send_message("由于战斗用时过久, 在state:None中重启.")
                         logger.info("由于战斗用时过久, 在state:None中重启.")
                         restartGame()
@@ -1238,50 +1489,46 @@ def Factory():
                     break
                 case DungeonState.Dungeon:
                     Press([1,1])
-                    ########### RESUME
-                    shouldResume = False # 我们假定不需要resume, 但是如果检测到战斗或宝箱, 那么尝试resume.
-                    if (setting._TIME_CHEST !=0) or (setting._TIME_COMBAT!=0):
-                        shouldResume = True
                     ########### COMBAT RESET
                     # 战斗结束了, 我们将一些设置复位
                     if setting._AOE_ONCE:
-                        setting._ENOUGH_AOE = False
+                        runtimeContext._ENOUGH_AOE = False
                     ########### TIMER
-                    if (setting._TIME_CHEST !=0) or (setting._TIME_COMBAT!=0):
+                    if (runtimeContext._TIME_CHEST !=0) or (runtimeContext._TIME_COMBAT!=0):
                         spend_on_chest = 0
-                        if setting._TIME_CHEST !=0:
-                            spend_on_chest = time.time()-setting._TIME_CHEST
-                            setting._TIME_CHEST = 0
+                        if runtimeContext._TIME_CHEST !=0:
+                            spend_on_chest = time.time()-runtimeContext._TIME_CHEST
+                            runtimeContext._TIME_CHEST = 0
                         spend_on_combat = 0
-                        if setting._TIME_COMBAT !=0:
-                            spend_on_combat = time.time()-setting._TIME_COMBAT
-                            setting._TIME_COMBAT = 0
+                        if runtimeContext._TIME_COMBAT !=0:
+                            spend_on_combat = time.time()-runtimeContext._TIME_COMBAT
+                            runtimeContext._TIME_COMBAT = 0
                         logger.info(f"粗略统计: 宝箱{spend_on_chest:.2f}秒, 战斗{spend_on_combat:.2f}秒.")
                         if (spend_on_chest!=0) and (spend_on_combat!=0):
                             if spend_on_combat>spend_on_chest:
-                                setting._TIME_COMBAT_TOTAL = setting._TIME_COMBAT_TOTAL + spend_on_combat-spend_on_chest
-                                setting._TIME_CHEST_TOTAL = setting._TIME_CHEST_TOTAL + spend_on_chest
+                                runtimeContext._TIME_COMBAT_TOTAL = runtimeContext._TIME_COMBAT_TOTAL + spend_on_combat-spend_on_chest
+                                runtimeContext._TIME_CHEST_TOTAL = runtimeContext._TIME_CHEST_TOTAL + spend_on_chest
                             else:
-                                setting._TIME_CHEST_TOTAL = setting._TIME_CHEST_TOTAL + spend_on_chest-spend_on_combat
-                                setting._TIME_COMBAT_TOTAL = setting._TIME_COMBAT_TOTAL + spend_on_combat
+                                runtimeContext._TIME_CHEST_TOTAL = runtimeContext._TIME_CHEST_TOTAL + spend_on_chest-spend_on_combat
+                                runtimeContext._TIME_COMBAT_TOTAL = runtimeContext._TIME_COMBAT_TOTAL + spend_on_combat
                         else:
-                            setting._TIME_COMBAT_TOTAL = setting._TIME_COMBAT_TOTAL + spend_on_combat
-                            setting._TIME_CHEST_TOTAL = setting._TIME_CHEST_TOTAL + spend_on_chest
+                            runtimeContext._TIME_COMBAT_TOTAL = runtimeContext._TIME_COMBAT_TOTAL + spend_on_combat
+                            runtimeContext._TIME_CHEST_TOTAL = runtimeContext._TIME_CHEST_TOTAL + spend_on_chest
                     ########### RECOVER
                     if needRecoverBecauseChest:
                         logger.info("进行开启宝箱后的恢复.")
-                        setting._COUNTERCHEST+=1
+                        runtimeContext._COUNTERCHEST+=1
                         needRecoverBecauseChest = False
-                        setting._MEET_CHEST_OR_COMBAT = True
+                        runtimeContext._MEET_CHEST_OR_COMBAT = True
                         if not setting._SKIPCHESTRECOVER:
                             logger.info("由于面板配置, 进行开启宝箱后恢复.")
                             shouldRecover = True
                         else:
                             logger.info("由于面板配置, 跳过了开启宝箱后恢复.")
                     if needRecoverBecauseCombat:
-                        setting._COUNTERCOMBAT+=1
+                        runtimeContext._COUNTERCOMBAT+=1
                         needRecoverBecauseCombat = False
-                        setting._MEET_CHEST_OR_COMBAT = True
+                        runtimeContext._MEET_CHEST_OR_COMBAT = True
                         if (not setting._SKIPCOMBATRECOVER):
                             logger.info("由于面板配置, 进行战后恢复.")
                             shouldRecover = True
@@ -1289,29 +1536,39 @@ def Factory():
                             logger.info("由于面板配置, 跳过了战后后恢复.")
                     if shouldRecover:
                         Press([1,1])
-                        Press([150,1300])
-                        Sleep(1)
+                        FindCoordsOrElseExecuteFallbackAndWait( # 点击打开人物面板有可能会被战斗打断
+                            ['trait','combatActive','combatActive_2','chestFlag','combatClose'],
+                            [[36,1425],[322,1425],[606,1425]],
+                            1
+                            )
                         if CheckIf(ScreenShot(),'trait'):
-                            for _ in range(3):
-                                Press([833,843])
-                                if CheckIf(ScreenShot(),'recover'):
-                                    Sleep(1)
-                                    Press([600,1200])
+                            Press([833,843])
+                            Sleep(1)
+                            FindCoordsOrElseExecuteFallbackAndWait(
+                                ['recover','combatActive','combatActive_2'],
+                                [833,843],
+                                1
+                                )
+                            if CheckIf(ScreenShot(),'recover'):
+                                Sleep(1)
+                                Press([600,1200])
+                                for _ in range(5):
+                                    t = time.time()
                                     PressReturn()
-                                    Sleep(0.5)
-                                    PressReturn()
-                                    PressReturn()
-                                    shouldRecover = False
-                                    break
-                    ########### REUSME
-                    Sleep(1)
-                    if shouldResume:
-                        Press(CheckIf(ScreenShot(), 'resume'))
-                        StateMoving_CheckFrozen()
+                                    if time.time()-t<0.3:
+                                        Sleep(0.3-(time.time()-t))
+                                shouldRecover = False
                     ########### OPEN MAP
+                    Sleep(1)
                     Press([777,150])
                     dungState = DungeonState.Map
                 case DungeonState.Map:
+                    if runtimeContext._SHOULDAPPLYSPELLSEQUENCE: # 默认值(第一次)和重启后应当直接应用序列
+                        runtimeContext._SHOULDAPPLYSPELLSEQUENCE = False
+                        if targetInfoList[0].activeSpellSequenceOverride:
+                            logger.info("因为初始化, 复制了施法序列.")
+                            runtimeContext._ACTIVESPELLSEQUENCE = copy.deepcopy(quest._SPELLSEQUENCE)
+
                     dungState, newTargetInfoList = StateSearch(waitTimer,targetInfoList)
                     
                     if newTargetInfoList == targetInfoList:
@@ -1326,6 +1583,15 @@ def Factory():
                     if (targetInfoList==None) or (targetInfoList == []):
                         logger.info("地下城目标完成. 地下城状态结束.(仅限任务模式.)")
                         break
+
+                    if (newTargetInfoList != targetInfoList):
+                        if newTargetInfoList[0].activeSpellSequenceOverride:
+                            logger.info("因为目标信息变动, 重新复制了施法序列.")
+                            runtimeContext._ACTIVESPELLSEQUENCE = copy.deepcopy(quest._SPELLSEQUENCE)
+                        else:
+                            logger.info("因为目标信息变动, 清空了施法序列.")
+                            runtimeContext._ACTIVESPELLSEQUENCE = None
+
                 case DungeonState.Chest:
                     needRecoverBecauseChest = True
                     dungState = StateChest()
@@ -1338,19 +1604,20 @@ def Factory():
         StateInn()
         Press(FindCoordsOrElseExecuteFallbackAndWait('guildRequest',['guild',[1,1]],1))
         Press(FindCoordsOrElseExecuteFallbackAndWait('guildFeatured',['guildRequest',[1,1]],1))
-        Sleep(2)
-        DeviceShell(f"input swipe 150 1000 150 200")
+        for _ in range(3):
+            Sleep(1)
+            DeviceShell(f"input swipe 150 1000 150 200")
         Sleep(2)
         pos = FindCoordsOrElseExecuteFallbackAndWait(request,['input swipe 150 200 150 250',[1,1]],1)
         if not CheckIf(ScreenShot(),'request_accepted',[[0,pos[1]-200,900,pos[1]+200]]):
-            FindCoordsOrElseExecuteFallbackAndWait(['Inn','guildRequest'],[[pos[0]+pressbias[0],pos[1]+pressbias[1]],[1,1],'return'],1)
-            FindCoordsOrElseExecuteFallbackAndWait('Inn','return',1)
+            FindCoordsOrElseExecuteFallbackAndWait(['Inn','guildRequest'],[[pos[0]+pressbias[0],pos[1]+pressbias[1]],'return',[1,1]],1)
+            FindCoordsOrElseExecuteFallbackAndWait('Inn',['return',[1,1]],1)
         else:
             logger.info("奇怪, 任务怎么已经接了.")
-            FindCoordsOrElseExecuteFallbackAndWait('Inn','return',1)
+            FindCoordsOrElseExecuteFallbackAndWait('Inn',['return',[1,1]],1)
 
     def DungeonFarm():
-        nonlocal setting
+        nonlocal runtimeContext
         state = None
         while 1:
             logger.info("======================")
@@ -1372,22 +1639,26 @@ def Factory():
                         logger.info("即将停止脚本...")
                         break
                 case State.Inn:
-                    if setting._LAPTIME!= 0:
-                        setting._TOTALTIME = setting._TOTALTIME + time.time() - setting._LAPTIME
-                        tg_bot.send_message(f"已完成{setting._COUNTERDUNG}次地下城. 最后一次用时:{round(time.time()-setting._LAPTIME,2)}秒.\n累计开箱子{setting._COUNTERCHEST}次.累计战斗{setting._COUNTERCOMBAT}次.\n累计用时{round(setting._TOTALTIME,2)}秒.战斗{round(setting._TIME_COMBAT_TOTAL*100/setting._TOTALTIME,2)}%,宝箱{round(setting._TIME_CHEST_TOTAL*100/setting._TOTALTIME,2)}%.")
-                        logger.info(f"已完成{setting._COUNTERDUNG}次地下城. 最后一次用时:{round(time.time()-setting._LAPTIME,2)}秒.\n累计开箱子{setting._COUNTERCHEST}次.累计战斗{setting._COUNTERCOMBAT}次.\n累计用时{round(setting._TOTALTIME,2)}秒.战斗{round(setting._TIME_COMBAT_TOTAL*100/setting._TOTALTIME,2)}%,宝箱{round(setting._TIME_CHEST_TOTAL*100/setting._TOTALTIME,2)}%.",
-                                    extra={"summary": True})
-                    setting._LAPTIME = time.time()
-                    setting._COUNTERDUNG+=1
-                    if not setting._MEET_CHEST_OR_COMBAT:
+                    if runtimeContext._LAPTIME!= 0:
+                        runtimeContext._TOTALTIME = runtimeContext._TOTALTIME + time.time() - runtimeContext._LAPTIME
+                        summary_text = f"已完成{runtimeContext._COUNTERDUNG}次\"{setting._FARMTARGET_TEXT}\"地下城.\n总计{round(runtimeContext._TOTALTIME,2)}秒.上次用时:{round(time.time()-runtimeContext._LAPTIME,2)}秒.\n"
+                        if runtimeContext._COUNTERCHEST > 0:
+                            summary_text += f"箱子效率{round(runtimeContext._TOTALTIME/runtimeContext._COUNTERCHEST,2)}秒/箱.\n累计开箱{runtimeContext._COUNTERCHEST}次,开箱平均耗时{round(runtimeContext._TIME_CHEST_TOTAL/runtimeContext._COUNTERCHEST,2)}秒.\n"
+                        if runtimeContext._COUNTERCOMBAT > 0:
+                            summary_text += f"累计战斗{runtimeContext._COUNTERCOMBAT}次.战斗平均用时{round(runtimeContext._TIME_COMBAT_TOTAL/runtimeContext._COUNTERCOMBAT,2)}秒."
+                        logger.info(summary_text,extra={"summary": True})
+                        tg_bot.send_message(summary_text)
+                    runtimeContext._LAPTIME = time.time()
+                    runtimeContext._COUNTERDUNG+=1
+                    if not runtimeContext._MEET_CHEST_OR_COMBAT:
                         logger.info("因为没有遇到战斗或宝箱, 跳过恢复")
                     elif not setting._ACTIVE_REST:
                         logger.info("因为面板设置, 跳过恢复")
-                    elif ((setting._COUNTERDUNG-1) % (setting._RESTINTERVEL+1) != 0):
+                    elif ((runtimeContext._COUNTERDUNG-1) % (setting._RESTINTERVEL+1) != 0):
                         logger.info("还有许多地下城要刷. 面具男, 现在还不能休息哦.")
                     else:
                         logger.info("休息时间到!")
-                        setting._MEET_CHEST_OR_COMBAT = False
+                        runtimeContext._MEET_CHEST_OR_COMBAT = False
                         RestartableSequenceExecution(
                         lambda:StateInn()
                         )
@@ -1405,16 +1676,16 @@ def Factory():
                     state = None
         setting._FINISHINGCALLBACK()
     def QuestFarm():
-        nonlocal setting
+        nonlocal setting # 强制自动战斗 等等.
+        nonlocal runtimeContext
         match setting._FARMTARGET:
             case '7000G':
-                stepNo = 1
                 while 1:
                     if setting._FORCESTOPING.is_set():
                         break
 
                     starttime = time.time()
-                    setting._COUNTERDUNG += 1
+                    runtimeContext._COUNTERDUNG += 1
                     def stepMain():
                         logger.info("第一步: 开始诅咒之旅...")
                         Press(FindCoordsOrElseExecuteFallbackAndWait('cursedWheel_timeLeap',['ruins','cursedWheel',[1,1]],1))
@@ -1440,7 +1711,7 @@ def Factory():
 
                     logger.info("第三步: 前往王城...")
                     RestartableSequenceExecution(
-                        lambda:Press(FindCoordsOrElseExecuteFallbackAndWait('intoWorldMap',[40, 1184],2)),
+                        lambda:IntoWorldMapAndZoom(),
                         lambda:Press(FindCoordsOrElseExecuteFallbackAndWait('RoyalCityLuknalia','input swipe 450 150 500 150',1)),
                         lambda:FindCoordsOrElseExecuteFallbackAndWait('guild',['RoyalCityLuknalia',[1,1]],1),
                         )
@@ -1485,24 +1756,20 @@ def Factory():
                             stepMark = 5
                         if stepMark == 5:
                             Press(FindCoordsOrElseExecuteFallbackAndWait('7000G/illgo',[[1,1],'7000G/olddist'],1))
-                            stepMark = 6
-                        if stepMark == 6:
                             Press(FindCoordsOrElseExecuteFallbackAndWait('7000G/noeasytask',[1,1],1))
-                            stepMark = 7
-                        FindCoordsOrElseExecuteFallbackAndWait('ruins',[1,1],1)
+                            FindCoordsOrElseExecuteFallbackAndWait('ruins',[1,1],1)
                     RestartableSequenceExecution(
                         lambda: stepMain()
                         )
                     costtime = time.time()-starttime
-                    logger.info(f"第{setting._COUNTERDUNG}次\"7000G\"完成. 该次花费时间{costtime:.2f}, 每秒收益:{7000/costtime:.2f}Gps.",
+                    logger.info(f"第{runtimeContext._COUNTERDUNG}次\"7000G\"完成. 该次花费时间{costtime:.2f}, 每秒收益:{7000/costtime:.2f}Gps.",
                                 extra={"summary": True})
-
             case 'fordraig':
                 quest._SPECIALDIALOGOPTION = ['fordraig/thedagger','fordraig/InsertTheDagger']
                 while 1:
                     if setting._FORCESTOPING.is_set():
                         break
-                    setting._COUNTERDUNG += 1
+                    runtimeContext._COUNTERDUNG += 1
                     setting._SYSTEMAUTOCOMBAT = True
                     starttime = time.time()
                     logger.info('第一步: 诅咒之旅...')
@@ -1519,9 +1786,9 @@ def Factory():
                         )
 
                     logger.info('第三步: 进入地下城.')
-                    Press(FindCoordsOrElseExecuteFallbackAndWait('intoWorldMap',[40, 1184],2))
-                    Press(FindCoordsOrElseExecuteFallbackAndWait('labyrinthOfFordraig','input swipe 450 150 500 150',1))
-                    Press(FindCoordsOrElseExecuteFallbackAndWait('fordraig/Entrance',['labyrinthOfFordraig',[1,1]],1))
+                    IntoWorldMapAndZoom()
+                    Press(FindCoordsOrElseExecuteFallbackAndWait('fordraig/labyrinthOfFordraig','input swipe 450 150 500 150',1))
+                    Press(FindCoordsOrElseExecuteFallbackAndWait('fordraig/Entrance',['fordraig/labyrinthOfFordraig',[1,1]],1))
                     FindCoordsOrElseExecuteFallbackAndWait('dungFlag',['fordraig/Entrance','GotoDung',[1,1]],1)
 
                     logger.info('第四步: 陷阱.')
@@ -1565,7 +1832,7 @@ def Factory():
                     FindCoordsOrElseExecuteFallbackAndWait("Inn",[1,1],1)
 
                     costtime = time.time()-starttime
-                    logger.info(f"第{setting._COUNTERDUNG}次\"鸟剑\"完成. 该次花费时间{costtime:.2f}.",
+                    logger.info(f"第{runtimeContext._COUNTERDUNG}次\"鸟剑\"完成. 该次花费时间{costtime:.2f}.",
                             extra={"summary": True})
             case 'repelEnemyForces':
                 if not setting._ACTIVE_REST:
@@ -1598,17 +1865,17 @@ def Factory():
                         logger.info(f"第{i+1}轮开始.")
                         secondcombat = False
                         while 1:
-                            Press(FindCoordsOrElseExecuteFallbackAndWait(['icanstillgo','combatActive'],['input swipe 400 400 400 100',[1,1]],1))
+                            Press(FindCoordsOrElseExecuteFallbackAndWait(['icanstillgo','combatActive','combatActive_2'],['input swipe 400 400 400 100',[1,1]],1))
                             Sleep(1)
                             if setting._AOE_ONCE:
-                                setting._ENOUGH_AOE = False
+                                runtimeContext._ENOUGH_AOE = False
                             while 1:
                                 scn=ScreenShot()
-                                if Press(CheckIf(scn,'retry')):
+                                if Press(CheckIf(scn,'retry')) or Press(CheckIf(scn,'retry_blank')):
                                     continue
                                 if CheckIf(scn,'icanstillgo'):
                                     break
-                                if CheckIf(scn,'combatActive'):
+                                if CheckIf(scn,'combatActive') or CheckIf(scn,'combatActive_2'):
                                     StateCombat()
                                 else:
                                     Press([1,1])
@@ -1619,6 +1886,7 @@ def Factory():
                             else:
                                 logger.info(f"第2场战斗结束.")
                                 Press(CheckIf(ScreenShot(),'letswithdraw'))
+                                Sleep(1)
                                 break
                         logger.info(f"第{i+1}轮结束.")
                     RestartableSequenceExecution(
@@ -1633,17 +1901,124 @@ def Factory():
                     counter+=1
                     logger.info(f"第{counter}x{setting._RESTINTERVEL}轮\"击退敌势力\"完成, 共计{counter*setting._RESTINTERVEL*2}场战斗. 该次花费时间{(time.time()-t):.2f}秒.",
                                     extra={"summary": True})
+            case 'darkLight':
+                gameFrozen_none = []
+                gameFrozen_map = 0
+                dungState = None
+                shouldRecover = False
+                waitTimer = time.time()
+                needRecoverBecauseCombat = False
+                needRecoverBecauseChest = False
+                while 1:
+                    _, dungState,_ = IdentifyState()
+                    logger.info(dungState)
+                    match dungState:
+                        case None:
+                            s, dungState,scn = IdentifyState()
+                            if (s == State.Inn) or (dungState == DungeonState.Quit):
+                                break
+                            gameFrozen_none, result = GameFrozenCheck(gameFrozen_none,scn)
+                            if result:
+                                logger.info("由于画面卡死, 在state:None中重启.")
+                                restartGame()
+                            MAXTIMEOUT = 400
+                            if (runtimeContext._TIME_CHEST != 0 ) and (time.time()-runtimeContext._TIME_CHEST > MAXTIMEOUT):
+                                logger.info("由于宝箱用时过久, 在state:None中重启.")
+                                restartGame()
+                            if (runtimeContext._TIME_COMBAT != 0) and (time.time()-runtimeContext._TIME_COMBAT > MAXTIMEOUT):
+                                logger.info("由于战斗用时过久, 在state:None中重启.")
+                                restartGame()
+                        case DungeonState.Dungeon:
+                            Press([1,1])
+                            ########### COMBAT RESET
+                            # 战斗结束了, 我们将一些设置复位
+                            if setting._AOE_ONCE:
+                                runtimeContext._ENOUGH_AOE = False
+                            ########### TIMER
+                            if (runtimeContext._TIME_CHEST !=0) or (runtimeContext._TIME_COMBAT!=0):
+                                spend_on_chest = 0
+                                if runtimeContext._TIME_CHEST !=0:
+                                    spend_on_chest = time.time()-runtimeContext._TIME_CHEST
+                                    runtimeContext._TIME_CHEST = 0
+                                spend_on_combat = 0
+                                if runtimeContext._TIME_COMBAT !=0:
+                                    spend_on_combat = time.time()-runtimeContext._TIME_COMBAT
+                                    runtimeContext._TIME_COMBAT = 0
+                                logger.info(f"粗略统计: 宝箱{spend_on_chest:.2f}秒, 战斗{spend_on_combat:.2f}秒.")
+                                if (spend_on_chest!=0) and (spend_on_combat!=0):
+                                    if spend_on_combat>spend_on_chest:
+                                        runtimeContext._TIME_COMBAT_TOTAL = runtimeContext._TIME_COMBAT_TOTAL + spend_on_combat-spend_on_chest
+                                        runtimeContext._TIME_CHEST_TOTAL = runtimeContext._TIME_CHEST_TOTAL + spend_on_chest
+                                    else:
+                                        runtimeContext._TIME_CHEST_TOTAL = runtimeContext._TIME_CHEST_TOTAL + spend_on_chest-spend_on_combat
+                                        runtimeContext._TIME_COMBAT_TOTAL = runtimeContext._TIME_COMBAT_TOTAL + spend_on_combat
+                                else:
+                                    runtimeContext._TIME_COMBAT_TOTAL = runtimeContext._TIME_COMBAT_TOTAL + spend_on_combat
+                                    runtimeContext._TIME_CHEST_TOTAL = runtimeContext._TIME_CHEST_TOTAL + spend_on_chest
+                            ########### RECOVER
+                            if needRecoverBecauseChest:
+                                logger.info("进行开启宝箱后的恢复.")
+                                runtimeContext._COUNTERCHEST+=1
+                                needRecoverBecauseChest = False
+                                runtimeContext._MEET_CHEST_OR_COMBAT = True
+                                if not setting._SKIPCHESTRECOVER:
+                                    logger.info("由于面板配置, 进行开启宝箱后恢复.")
+                                    shouldRecover = True
+                                else:
+                                    logger.info("由于面板配置, 跳过了开启宝箱后恢复.")
+                            if needRecoverBecauseCombat:
+                                runtimeContext._COUNTERCOMBAT+=1
+                                needRecoverBecauseCombat = False
+                                runtimeContext._MEET_CHEST_OR_COMBAT = True
+                                if (not setting._SKIPCOMBATRECOVER):
+                                    logger.info("由于面板配置, 进行战后恢复.")
+                                    shouldRecover = True
+                                else:
+                                    logger.info("由于面板配置, 跳过了战后后恢复.")
+                            if shouldRecover:
+                                Press([1,1])
+                                FindCoordsOrElseExecuteFallbackAndWait( # 点击打开人物面板有可能会被战斗打断
+                                    ['trait','combatActive','combatActive_2','chestFlag','combatClose'],
+                                    [[36,1425],[322,1425],[606,1425]],
+                                    1
+                                    )
+                                if CheckIf(ScreenShot(),'trait'):
+                                    Press([833,843])
+                                    Sleep(1)
+                                    FindCoordsOrElseExecuteFallbackAndWait(
+                                        ['recover','combatActive','combatActive_2'],
+                                        [833,843],
+                                        1
+                                        )
+                                    if CheckIf(ScreenShot(),'recover'):
+                                        Sleep(1)
+                                        Press([600,1200])
+                                        for _ in range(5):
+                                            t = time.time()
+                                            PressReturn()
+                                            if time.time()-t<0.3:
+                                                Sleep(0.3-(time.time()-t))
+                                        shouldRecover = False
+                            ########### light the dark light
+                            Press(FindCoordsOrElseExecuteFallbackAndWait('darklight_lightIt','darkLight',1))
+                        case DungeonState.Chest:
+                            needRecoverBecauseChest = True
+                            dungState = StateChest()
+                        case DungeonState.Combat:
+                            needRecoverBecauseCombat =True
+                            StateCombat()
+                            dungState = None
             case 'LBC-oneGorgon':
                 checkCSC = False
                 while 1:
                     if setting._FORCESTOPING.is_set():
                         break
-                    if setting._LAPTIME!= 0:
-                        setting._TOTALTIME = setting._TOTALTIME + time.time() - setting._LAPTIME
-                        logger.info(f"第{setting._COUNTERDUNG}次三牛完成. 本次用时:{round(time.time()-setting._LAPTIME,2)}秒. 累计开箱子{setting._COUNTERCHEST}, 累计战斗{setting._COUNTERCOMBAT}, 累计用时{round(setting._TOTALTIME,2)}秒.",
+                    if runtimeContext._LAPTIME!= 0:
+                        runtimeContext._TOTALTIME = runtimeContext._TOTALTIME + time.time() - runtimeContext._LAPTIME
+                        logger.info(f"第{runtimeContext._COUNTERDUNG}次三牛完成. 本次用时:{round(time.time()-runtimeContext._LAPTIME,2)}秒. 累计开箱子{runtimeContext._COUNTERCHEST}, 累计战斗{runtimeContext._COUNTERCOMBAT}, 累计用时{round(runtimeContext._TOTALTIME,2)}秒.",
                                     extra={"summary": True})
-                    setting._LAPTIME = time.time()
-                    setting._COUNTERDUNG+=1
+                    runtimeContext._LAPTIME = time.time()
+                    runtimeContext._COUNTERDUNG+=1
                     def stepOne():
                         nonlocal checkCSC
                         Press(FindCoordsOrElseExecuteFallbackAndWait('cursedWheel',['ruins',[1,1]],1))
@@ -1655,8 +2030,14 @@ def Factory():
 
                         while CheckIf(ScreenShot(), 'leap'):
                             if not checkCSC:
-                                Press(CheckIf(ScreenShot(),'CSC'))
-                                Press(CheckIf(ScreenShot(),'LBC/didnottakethequest'))
+                                FindCoordsOrElseExecuteFallbackAndWait('LBC/symbolofalliance','CSC',1)
+                                while 1:
+                                    if Press(CheckIf(WrapImage(ScreenShot(),2,0,0),'LBC/didnottakethequest')):
+                                        continue
+                                    else:
+                                        break
+                                Press(CheckIf(WrapImage(ScreenShot(),2,1,0),'LBC/EnaWasSaved'))
+                                Sleep(1)
                                 PressReturn()
                                 checkCSC = True
                             Press(CheckIf(ScreenShot(),'leap'))
@@ -1673,27 +2054,26 @@ def Factory():
                         )
                     RestartableSequenceExecution(
                         lambda: logger.info("第三步: 前往王城"),
-                        lambda: Press(FindCoordsOrElseExecuteFallbackAndWait('intoWorldMap',[40, 1184],2)),
+                        lambda: IntoWorldMapAndZoom(),
                         lambda: Press(FindCoordsOrElseExecuteFallbackAndWait('RoyalCityLuknalia','input swipe 450 150 500 150',1)),
                         lambda: FindCoordsOrElseExecuteFallbackAndWait('guild',['RoyalCityLuknalia',[1,1]],1),
                         )
-                                           
-                    RestartableSequenceExecution(
-                        lambda: logger.info('第四步: 领取任务'),
-                        lambda: StateAcceptRequest('LBC/Request',[266,237])
-                        )
-
+                    
                     def stepFive():
                         scn = ScreenShot()
                         if Press(CheckIf(scn,'LBC/LBC')) or CheckIf(scn,"dungFlag"):
                             pass
                         else:
-                            Press(FindCoordsOrElseExecuteFallbackAndWait('intoWorldMap',['closePartyInfo','closePartyInfo_fortress',[1,1]],1))
-                            Press(FindCoordsOrElseExecuteFallbackAndWait('LBC/LBC','input swipe 100 100 700 1500',1))
+                            IntoWorldMapAndZoom(),
+                            Press(FindCoordsOrElseExecuteFallbackAndWait('LBC/LBC','input swipe 100 100 100 200',1))
+                                           
                     RestartableSequenceExecution(
+                        lambda: logger.info('第四步: 领取任务'),
+                        lambda: StateAcceptRequest('LBC/Request',[266,257]),
                         lambda: logger.info('第五步: 进入牛洞'),
                         lambda: stepFive()
                         )
+
                     Gorgon1 = TargetInfo('position','左上',[134,342])
                     Gorgon2 = TargetInfo('position','右上',[500,395])
                     Gorgon3 = TargetInfo('position','右下',[340,1027])
@@ -1726,12 +2106,12 @@ def Factory():
                     quest._SPECIALDIALOGOPTION = ['SSC/dotdotdot','SSC/shadow']
                     if setting._FORCESTOPING.is_set():
                         break
-                    if setting._LAPTIME!= 0:
-                        setting._TOTALTIME = setting._TOTALTIME + time.time() - setting._LAPTIME
-                        logger.info(f"第{setting._COUNTERDUNG}次忍洞完成. 本次用时:{round(time.time()-setting._LAPTIME,2)}秒. 累计开箱子{setting._COUNTERCHEST}, 累计战斗{setting._COUNTERCOMBAT}, 累计用时{round(setting._TOTALTIME,2)}秒.",
+                    if runtimeContext._LAPTIME!= 0:
+                        runtimeContext._TOTALTIME = runtimeContext._TOTALTIME + time.time() - runtimeContext._LAPTIME
+                        logger.info(f"第{runtimeContext._COUNTERDUNG}次忍洞完成. 本次用时:{round(time.time()-runtimeContext._LAPTIME,2)}秒. 累计开箱子{runtimeContext._COUNTERCHEST}, 累计战斗{runtimeContext._COUNTERCOMBAT}, 累计用时{round(runtimeContext._TOTALTIME,2)}秒.",
                                     extra={"summary": True})
-                    setting._LAPTIME = time.time()
-                    setting._COUNTERDUNG+=1
+                    runtimeContext._LAPTIME = time.time()
+                    runtimeContext._COUNTERDUNG+=1
                     RestartableSequenceExecution(
                         lambda: logger.info('第一步: 重置因果'),
                         lambda:Press(FindCoordsOrElseExecuteFallbackAndWait('cursedWheel',['ruins',[1,1]],1)),
@@ -1741,7 +2121,7 @@ def Factory():
                     Sleep(10)
                     RestartableSequenceExecution(
                         lambda: logger.info("第二步: 前往王城"),
-                        lambda: Press(FindCoordsOrElseExecuteFallbackAndWait('intoWorldMap',[40, 1184],2)),
+                        lambda: IntoWorldMapAndZoom(),
                         lambda: Press(FindCoordsOrElseExecuteFallbackAndWait('RoyalCityLuknalia','input swipe 450 150 500 150',1)),
                         lambda: FindCoordsOrElseExecuteFallbackAndWait('guild',['RoyalCityLuknalia',[1,1]],1),
                         )
@@ -1772,8 +2152,8 @@ def Factory():
                         if Press(CheckIf(scn,'SSC/SSC')) or CheckIf(scn,"dungFlag"):
                             pass
                         else:
-                            Press(FindCoordsOrElseExecuteFallbackAndWait('intoWorldMap',['closePartyInfo','closePartyInfo_fortress',[1,1]],1))
-                            Press(FindCoordsOrElseExecuteFallbackAndWait('SSC/SSC','input swipe 700 100 100 100',1))
+                            IntoWorldMapAndZoom()
+                            Press(FindCoordsOrElseExecuteFallbackAndWait('SSC/SSC','input swipe 200 100 100 200',1))
                             FindCoordsOrElseExecuteFallbackAndWait('dungFlag',['SSC/SSC',[1,1]],1)
                     RestartableSequenceExecution(
                         lambda: logger.info('第四步: 进入忍洞'),
@@ -1797,18 +2177,176 @@ def Factory():
                                 TargetInfo('SSC/SSC_quit', '右下', None)
                             ])
                         )
+            case 'CaveOfSeperation':
+                while 1:
+                    if setting._FORCESTOPING.is_set():
+                        break
+                    if runtimeContext._LAPTIME!= 0:
+                        runtimeContext._TOTALTIME = runtimeContext._TOTALTIME + time.time() - runtimeContext._LAPTIME
+                        logger.info(f"第{runtimeContext._COUNTERDUNG}次约定之剑完成. 本次用时:{round(time.time()-runtimeContext._LAPTIME,2)}秒. 累计开箱子{runtimeContext._COUNTERCHEST}, 累计战斗{runtimeContext._COUNTERCOMBAT}, 累计用时{round(runtimeContext._TOTALTIME,2)}秒.",
+                                    extra={"summary": True})
+                    runtimeContext._LAPTIME = time.time()
+                    runtimeContext._COUNTERDUNG+=1
+                    def stepOne():
+                        Press(FindCoordsOrElseExecuteFallbackAndWait('cursedWheel',['ruins',[1,1]],1))
+                        Press(FindCoordsOrElseExecuteFallbackAndWait('cursedwheel_impregnableFortress',['cursedWheelTapRight',[1,1]],1))
 
+                        if not Press(CheckIf(ScreenShot(),'COS/GhostsOfYore')):
+                            DeviceShell(f"input swipe 450 1200 450 200")
+                            Press(FindCoordsOrElseExecuteFallbackAndWait('COS/GhostsOfYore','input swipe 50 1200 50 1300',1))
+
+                        while CheckIf(ScreenShot(), 'leap'):
+                            FindCoordsOrElseExecuteFallbackAndWait('COS/ArnasPast','CSC',1)
+                            while 1:
+                                if Press(CheckIf(WrapImage(ScreenShot(),2,0,0),'COS/didnottakethequest')):
+                                    continue
+                                else:
+                                    break
+                            PressReturn()
+                            Sleep(0.5)
+                            Press(CheckIf(ScreenShot(),'leap'))
+                            Sleep(2)
+                            Press(CheckIf(ScreenShot(),'COS/GhostsOfYore'))
+                    RestartableSequenceExecution(
+                        lambda: logger.info('第一步: 重置因果'),
+                        lambda: stepOne()
+                        )
+                    Sleep(10)
+                    RestartableSequenceExecution(
+                        lambda: logger.info("第二步: 返回要塞"),
+                        lambda: FindCoordsOrElseExecuteFallbackAndWait('Inn',['returntotown','returnText','leaveDung','blessing',[1,1]],2)
+                        )
+                    RestartableSequenceExecution(
+                        lambda: logger.info("第三步: 前往王城"),
+                        lambda: IntoWorldMapAndZoom(),
+                        lambda: Press(FindCoordsOrElseExecuteFallbackAndWait('RoyalCityLuknalia','input swipe 450 150 500 150',1)),
+                        lambda: FindCoordsOrElseExecuteFallbackAndWait('guild',['RoyalCityLuknalia',[1,1]],1),
+                        )
+                    
+                    RestartableSequenceExecution(
+                        lambda: logger.info('第四步: 领取任务'),
+                        lambda: FindCoordsOrElseExecuteFallbackAndWait(['COS/Okay','guildRequest'],['guild',[1,1]],1),
+                        lambda: FindCoordsOrElseExecuteFallbackAndWait('Inn',['COS/Okay','return',[1,1]],1),
+                        lambda: StateInn(),
+                        )
+                    
+                    RestartableSequenceExecution(
+                        lambda: logger.info('第五步: 进入洞窟'),
+                        lambda: Press(FindCoordsOrElseExecuteFallbackAndWait('COS/COS',['EdgeOfTown',[1,1]],1)),
+                        lambda: Press(FindCoordsOrElseExecuteFallbackAndWait('COS/COSENT',[1,1],1))
+                        )
+                    quest._SPECIALDIALOGOPTION = ['COS/takehimwithyou']
+                    cosb1f = [TargetInfo('position',"右下",[286-54,440]),
+                              TargetInfo('position',"右下",[819,653+54]),
+                              TargetInfo('position',"右上",[659-54,501]),
+                              TargetInfo('stair_2',"右上",[126-54,342]),
+                        ]
+                    RestartableSequenceExecution(
+                        lambda: logger.info('第六步: 1层找人'),
+                        lambda: StateDungeon(cosb1f)
+                        )
+
+                    quest._SPECIALFORCESTOPINGSYMBOL = ['COS/EnaTheAdventurer']
+                    cosb2f = [TargetInfo('position',"右上",[340+54,448]),
+                              TargetInfo('position',"右上",[500-54,1088]),
+                              TargetInfo('position',"左上",[398+54,766]),
+                        ]
+                    RestartableSequenceExecution(
+                        lambda: logger.info('第七步: 2层找人'),
+                        lambda: StateDungeon(cosb2f)
+                        )
+
+                    quest._SPECIALFORCESTOPINGSYMBOL = ['COS/requestwasfor'] 
+                    cosb3f = [TargetInfo('stair_3',"左上",[720,822]),
+                              TargetInfo('position',"左下",[239,600]),
+                              TargetInfo('position',"左下",[185,1185]),
+                              TargetInfo('position',"左下",[560,652]),
+                              ]
+                    RestartableSequenceExecution(
+                        lambda: logger.info('第八步: 3层找人'),
+                        lambda: StateDungeon(cosb3f)
+                        )
+
+                    quest._SPECIALFORCESTOPINGSYMBOL = None
+                    quest._SPECIALDIALOGOPTION = ['COS/requestwasfor'] 
+                    cosback2f = [
+                                 TargetInfo('stair_2',"左下",[827,547]),
+                                 TargetInfo('position',"右上",[340+54,448]),
+                                 TargetInfo('position',"右上",[500-54,1088]),
+                                 TargetInfo('position',"左上",[398+54,766]),
+                                 TargetInfo('position',"左上",[559,1087]),
+                                 TargetInfo('stair_1',"左上",[666,448]),
+                                 TargetInfo('position', "右下",[660,919])
+                        ]
+                    RestartableSequenceExecution(
+                        lambda: logger.info('第九步: 离开洞穴'),
+                        lambda: StateDungeon(cosback2f)
+                        )
+                    Press(FindCoordsOrElseExecuteFallbackAndWait("guild",['return',[1,1]],1)) # 回城
+                    FindCoordsOrElseExecuteFallbackAndWait("Inn",['return',[1,1]],1)
+                    
+                pass
+            case 'gaintKiller':
+                while 1:
+                    if setting._FORCESTOPING.is_set():
+                        break
+                    if runtimeContext._LAPTIME!= 0:
+                        runtimeContext._TOTALTIME = runtimeContext._TOTALTIME + time.time() - runtimeContext._LAPTIME
+                        logger.info(f"第{runtimeContext._COUNTERDUNG}次巨人完成. 本次用时:{round(time.time()-runtimeContext._LAPTIME,2)}秒. 累计开箱子{runtimeContext._COUNTERCHEST}, 累计战斗{runtimeContext._COUNTERCOMBAT}, 累计用时{round(runtimeContext._TOTALTIME,2)}秒.",
+                                    extra={"summary": True})
+                    runtimeContext._LAPTIME = time.time()
+                    runtimeContext._COUNTERDUNG+=1
+
+                    quest._EOT = [
+                        ["press","impregnableFortress",["EdgeOfTown",[1,1]],1],
+                        ["press","fortressb7f",[1,1],1]]
+                    RestartableSequenceExecution(
+                        lambda: StateEoT()
+                        )
+                    RestartableSequenceExecution(
+                        lambda: StateDungeon([TargetInfo('position','左上',[560,928])]),
+                        lambda: FindCoordsOrElseExecuteFallbackAndWait('dungFlag','return',1)
+                    )
+
+                    counter_candelabra = 0
+                    for _ in range(3):
+                        scn = ScreenShot()
+                        if CheckIf(scn,"gaint_candelabra_1") or CheckIf(scn,"gaint_candelabra_2"):
+                            counter_candelabra+=1
+                        Sleep(1)
+                    if counter_candelabra != 0:
+                        logger.info("没发现巨人.")
+                        RestartableSequenceExecution(
+                            lambda: FindCoordsOrElseExecuteFallbackAndWait('Inn',['returntotown','returnText','leaveDung','blessing',[1,1]],2)
+                        )
+                        continue
+                    
+                    logger.info("发现了巨人.")
+                    RestartableSequenceExecution(
+                        lambda: StateDungeon([TargetInfo('position','左上',[560,928+54],True)]),
+                        lambda: FindCoordsOrElseExecuteFallbackAndWait('dungFlag','return',1),
+                        lambda: FindCoordsOrElseExecuteFallbackAndWait('Inn',['returntotown','returnText','leaveDung','blessing',[1,1]],2)
+                    )
+
+                    if ((runtimeContext._COUNTERDUNG-1) % (setting._RESTINTERVEL+1) == 0):
+                        RestartableSequenceExecution(
+                            lambda: StateInn()
+                        )
+            # case 'test':
+            #     pass
         setting._FINISHINGCALLBACK()
         return
     def Farm(set:FarmConfig):
-        nonlocal setting
         nonlocal quest
+        nonlocal setting # 初始化
+        nonlocal runtimeContext
+        runtimeContext = RuntimeContext()
+
         setting = set
 
-        if not StartAdbServer(setting):
-            setting._FINISHINGCALLBACK()
-            return
-        setting._ADBDEVICE = CreateAdbDevice(setting)
+        Sleep(1) # 没有等utils初始化完成
+        
+        ResetADBDevice()
 
         quest = LoadQuest(setting._FARMTARGET)
         if quest._TYPE =="dungeon":
