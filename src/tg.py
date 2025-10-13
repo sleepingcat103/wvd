@@ -78,7 +78,7 @@ class TelegramBot:
                 if check_fn(update):
                     action_fn()
 
-    def send_message(self, message_text):
+    def send_message(self, message_text, reply_markup=None):
         """
         發送訊息
         """
@@ -90,8 +90,30 @@ class TelegramBot:
             "text": message_text,
             "parse_mode": "HTML" # 可以使用 HTML 或 Markdown 格式
         }
+
+        if reply_markup:
+            import json
+            params["reply_markup"] = json.dumps(reply_markup)
+
         response = self._call_api("sendMessage", http_method='post', params=params)
         return response
+
+    def send_control_panel(self):
+        """
+        發送帶有控制按鈕的操作面板
+        """
+        if not self.token or not self.chat_id:
+            return
+
+        keyboard = {
+            "keyboard": [
+                [{"text": "/farm_pause"}, {"text": "/farm_continue"}]
+            ],
+            "resize_keyboard": True,
+            "persistent": True
+        }
+
+        self.send_message("WvDAS 控制面板已啟動\n使用下方按鈕控制任務", reply_markup=keyboard)
 
     def add_message_handler(self, check_fn, action_fn):
         self.msg_handlers.append((check_fn, action_fn))
@@ -161,6 +183,18 @@ def start_telegram_polling(controller):
     def fn_continue_quest():
         bot.send_message('嘗試啟動任務')
         print('從 Telegram 收到信號：啟動任務')
+
+        # 檢查是否存在現有thread，如果有則先停止
+        if hasattr(controller, 'quest_threading') and controller.quest_threading and controller.quest_threading.is_alive():
+            print('檢測到現有任務執行緒，先停止...')
+            bot.send_message('檢測到現有任務，先停止舊任務...')
+            controller.msg_queue.put(('stop_quest', None))
+            # 等待thread結束
+            controller.quest_threading.join(timeout=10)
+            if controller.quest_threading.is_alive():
+                print('警告：舊任務未能在10秒內停止')
+                bot.send_message('警告：舊任務未能完全停止，仍嘗試啟動新任務')
+
         # 需要重新載入設定
         from script import FarmConfig, CONFIG_VAR_LIST
         from utils import LoadConfigFromFile
@@ -176,6 +210,9 @@ def start_telegram_polling(controller):
     # 註冊處理器
     bot.add_message_handler(check_pause_quest, fn_pause_quest)
     bot.add_message_handler(check_continue_quest, fn_continue_quest)
+
+    # 發送控制面板
+    bot.send_control_panel()
 
     # 持續輪詢
     while True:

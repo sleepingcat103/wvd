@@ -1,0 +1,15 @@
+REM 複製一個bat檔
+
+@echo off
+cd /d "%~dp0"
+
+REM 自行設定 Telegram Bot Token 和 Chat ID
+set BOT_TOKEN=111111111:ZZZZZZZZZZZZZZZ-ZZZZZZZZZZZZZZZ
+set CHAT_ID=0000000
+set CONFIG_FILE=config.json
+
+REM 直接啟動 Telegram 控制模式
+python src/tg.py --token "%BOT_TOKEN%" --chat-id "%CHAT_ID%" --config "%CONFIG_FILE%"
+
+REM 或是你使用了conda環境，用下面這條
+REM conda activate python & python src/tg.py --token "%BOT_TOKEN%" --chat-id "%CHAT_ID%" --config "%CONFIG_FILE%"
