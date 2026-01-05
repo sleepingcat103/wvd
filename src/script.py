@@ -18,7 +18,7 @@ CC_SKILLS = ["KANTIOS"]
 SECRET_AOE_SKILLS = ["SAoLABADIOS","SAoLAERLIK","SAoLAFOROS"]
 FULL_AOE_SKILLS = ["LAERLIK", "LAMIGAL","LAZELOS", "LACONES", "LAFOROS","LAHALITO", "LAFERU", "千恋万花"]
 ROW_AOE_SKILLS = ["maerlik", "mahalito", "mamigal","mazelos","maferu", "macones","maforos","终焉之刻"]
-PHYSICAL_SKILLS = ["动静一击","全力一击","死死连葬","tzalik","居合","精密攻击","锁腹刺","破甲","星光裂","迟钝连携击","强袭","重装一击","眩晕打击","幻影狩猎"]
+PHYSICAL_SKILLS = ["动静一击","裂地一击","全力一击","死死连葬","tzalik","居合","精密攻击","锁腹刺","破甲","星光裂","迟钝连携击","强袭","重装一击","眩晕打击","幻影狩猎"]
 
 ALL_SKILLS = CC_SKILLS + SECRET_AOE_SKILLS + FULL_AOE_SKILLS + ROW_AOE_SKILLS +  PHYSICAL_SKILLS
 ALL_SKILLS = [s for s in ALL_SKILLS if s in list(set(ALL_SKILLS))]
@@ -70,7 +70,6 @@ class FarmConfig:
         self._MSGQUEUE = None
         #### 底层接口
         self._ADBDEVICE = None
-        self._FINISHINGCALLBACK = lambda: True
     def __getattr__(self, name):
         # 当访问不存在的属性时，抛出AttributeError
         raise AttributeError(f"FarmConfig对象没有属性'{name}'")
@@ -481,9 +480,31 @@ def Factory():
         time.sleep(t)
     def ScreenShot():
         while True:
+            exception = None
+            result = None
+            completed = Event()
+
+            def adb_screencap_thread():
+                nonlocal exception, result
+                try:
+                    result = setting._ADBDEVICE.screencap()
+                except Exception as e:
+                    exception = e
+                finally:
+                    completed.set()
+            
+            thread = Thread(target= adb_screencap_thread)
+            thread.daemon = True
+            thread.start()
+
             try:
-                # logger.debug('ScreenShot')
-                screenshot = setting._ADBDEVICE.screencap()
+                if not completed.wait(timeout=5):
+                    logger.warning(f"截图超时")
+                    raise TimeoutError(f"截图超时")
+                if exception is not None:
+                    raise exception
+                
+                screenshot = result
                 screenshot_np = np.frombuffer(screenshot, dtype=np.uint8)
 
                 if screenshot_np.size == 0:
@@ -950,6 +971,20 @@ def Factory():
         Combat = 'combat'
         Quit = 'quit'
 
+    def DungeonCompletionCounter():
+        nonlocal runtimeContext
+        if runtimeContext._LAPTIME!= 0:
+            runtimeContext._TOTALTIME = runtimeContext._TOTALTIME + time.time() - runtimeContext._LAPTIME
+            summary_text = f"已完成{runtimeContext._COUNTERDUNG}次\"{setting._FARMTARGET_TEXT}\"地下城.\n总计{round(runtimeContext._TOTALTIME,2)}秒.上次用时:{round(time.time()-runtimeContext._LAPTIME,2)}秒.\n"
+            if runtimeContext._COUNTERCHEST > 0:
+                summary_text += f"箱子效率{round(runtimeContext._TOTALTIME/runtimeContext._COUNTERCHEST,2)}秒/箱.\n累计开箱{runtimeContext._COUNTERCHEST}次,开箱平均耗时{round(runtimeContext._TIME_CHEST_TOTAL/runtimeContext._COUNTERCHEST,2)}秒.\n"
+            if runtimeContext._COUNTERCOMBAT > 0:
+                summary_text += f"累计战斗{runtimeContext._COUNTERCOMBAT}次.战斗平均用时{round(runtimeContext._TIME_COMBAT_TOTAL/runtimeContext._COUNTERCOMBAT,2)}秒."
+            logger.info(f"{runtimeContext._IMPORTANTINFO}{summary_text}",extra={"summary": True})
+            tg_bot.send_message(f"{runtimeContext._IMPORTANTINFO}{summary_text}")
+        runtimeContext._LAPTIME = time.time()
+        runtimeContext._COUNTERDUNG+=1
+
     def TeleportFromCityToWorldLocation(target, swipe):
         nonlocal runtimeContext
         FindCoordsOrElseExecuteFallbackAndWait(['intoWorldMap','dungFlag','worldmapflag','openworldmap'],['closePartyInfo','closePartyInfo_fortress',[550,1]],1)
@@ -1101,19 +1136,21 @@ def Factory():
                 return IdentifyState()
 
             if CheckIf(screen,"returntoTown"):
-                if runtimeContext._MEET_CHEST_OR_COMBAT:
+                if setting._ACTIVE_REST and runtimeContext._MEET_CHEST_OR_COMBAT:
                     FindCoordsOrElseExecuteFallbackAndWait('Inn',['return',[1,1]],1)
                     return State.Inn,DungeonState.Quit, screen
                 else:
                     logger.info("由于没有遇到任何宝箱或发生任何战斗, 跳过回城.")
+                    DungeonCompletionCounter()
                     return State.EoT,DungeonState.Quit,screen
 
             if pos:=(CheckIf(screen,"openworldmap")):
-                if runtimeContext._MEET_CHEST_OR_COMBAT:
+                if setting._ACTIVE_REST and runtimeContext._MEET_CHEST_OR_COMBAT:
                     Press(pos)
                     return IdentifyState()
                 else:
                     logger.info("由于没有遇到任何宝箱或发生任何战斗, 跳过回城.")
+                    DungeonCompletionCounter()
                     return State.EoT,DungeonState.Quit,screen
 
             if CheckIf(screen,"RoyalCityLuknalia") or CheckIf(screen,"DHI"):
@@ -1201,7 +1238,6 @@ def Factory():
                     # logger.info("")
                     Sleep(2)
                 if Press(CheckIf(screen,'totitle')):
-                    tg_bot.send_message("网络故障警报! 网络故障警报! 返回标题, 重复, 返回标题!")
                     logger.info("网络故障警报! 网络故障警报! 返回标题, 重复, 返回标题!")
                     return IdentifyState()
                 PressReturn()
@@ -1677,23 +1713,18 @@ def Factory():
                         counter_trychar = -1
                         while 1:
                             counter_trychar += 1
-                            if CheckIf(ScreenShot(),'dungflag') and (counter_trychar <=20):
+                            scn=ScreenShot()
+                            if (CheckIf(scn,'dungflag') and not CheckIf(scn,'mapFlag')) and (counter_trychar <=30):
                                 Press([36+(counter_trychar%3)*286,1425])
                                 Sleep(1)
-                            else:
-                                logger.info("自动回复失败, 暂不进行回复.")
-                                break
-                            if CheckIf(scn:=ScreenShot(),'trait'):
+                                continue
+                            elif CheckIf(scn,'trait'):
                                 if CheckIf(scn,'story', [[676,800,220,108]]):
                                     Press([725,850])
                                 else:
                                     Press([830,850])
                                 Sleep(1)
-                                FindCoordsOrElseExecuteFallbackAndWait(
-                                    ['recover','combatActive',],
-                                    [833,843],
-                                    1
-                                    )
+                                FindCoordsOrElseExecuteFallbackAndWait(['recover','combatActive',],[833,843],1)
                                 if CheckIf(ScreenShot(),'recover'):
                                     Sleep(1.5)
                                     Press([600,1200])
@@ -1705,6 +1736,9 @@ def Factory():
                                             Sleep(0.3-(time.time()-t))
                                     shouldRecover = False
                                     break
+                            else:
+                                logger.info("自动回复异常, 中止本次回复.")
+                                break
                     ########### 防止转圈
                     if not runtimeContext._STEPAFTERRESTART:
                         Press([27,950])
@@ -1716,7 +1750,7 @@ def Factory():
                     if runtimeContext._RESUMEAVAILABLE and Press(CheckIf(ScreenShot(),'resume')):
                         logger.info("resume可用. 使用resume.")
                         lastscreen = ScreenShot()
-                        while 1:
+                        for counter in range(30):
                             Sleep(3)
                             _, dungState,screen = IdentifyState()
                             if dungState != DungeonState.Dungeon:
@@ -1732,6 +1766,9 @@ def Factory():
                                     logger.info(f"已退出移动状态. 当前状态为{dungState}.")
                                     break
                                 lastscreen = screen
+                            if counter == 29:
+                                # 转圈可能 重启.
+                                restartGame()
                     ########### 如果resume失败且为地下城
                     if dungState == DungeonState.Dungeon:
                         dungState = DungeonState.Map
@@ -1754,24 +1791,33 @@ def Factory():
                             if not Press(CheckIf(lastscreen,"chest_auto",[[710,250,180,180]])):
                                 dungState = None
                                 continue
-                        Sleep(0.5)
-                        while 1:
-                            Sleep(3)
-                            _, dungState,screen = IdentifyState()
-                            if dungState != DungeonState.Dungeon:
-                                logger.info(f"已退出移动状态. 当前状态为{dungState}.")
-                                break
-                            elif lastscreen is not None:
-                                gray1 = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-                                gray2 = cv2.cvtColor(lastscreen, cv2.COLOR_BGR2GRAY)
-                                mean_diff = cv2.absdiff(gray1, gray2).mean()/255
-                                logger.debug(f"移动停止检查:{mean_diff:.2f}")
-                                if mean_diff < 0.05:
-                                    logger.info(f"停止移动. 误差:{mean_diff}. 当前状态为{dungState}.")
-                                    if dungState == DungeonState.Dungeon:
-                                        targetInfoList.pop(0)
+                        Sleep(1.5)
+                        _, dungState,screen = IdentifyState()
+                        gray1 = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+                        gray2 = cv2.cvtColor(lastscreen, cv2.COLOR_BGR2GRAY)
+                        mean_diff = cv2.absdiff(gray1, gray2).mean()/255
+                        if mean_diff < 0.05:
+                            logger.info(f"停止移动. 误差:{mean_diff}. 当前状态为{dungState}.")
+                            if dungState == DungeonState.Dungeon:
+                                targetInfoList.pop(0)
+                                logger.info(f"退出宝箱搜索.")
+                        else:
+                            lastscreen = screen
+                            while 1:
+                                Sleep(3)
+                                _, dungState,screen = IdentifyState()
+                                if dungState != DungeonState.Dungeon:
+                                    logger.info(f"已退出移动状态. 当前状态为{dungState}.")
                                     break
-                                lastscreen = screen
+                                elif lastscreen is not None:
+                                    gray1 = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+                                    gray2 = cv2.cvtColor(lastscreen, cv2.COLOR_BGR2GRAY)
+                                    mean_diff = cv2.absdiff(gray1, gray2).mean()/255
+                                    logger.debug(f"移动停止检查:{mean_diff:.2f}")
+                                    if mean_diff < 0.05:
+                                        logger.info(f"停止移动. 误差:{mean_diff}. 当前状态为{dungState}.")
+                                        break
+                                    lastscreen = screen
                     else: 
                         Sleep(1)
                         Press([777,150])
@@ -1846,21 +1892,11 @@ def Factory():
                         logger.info("即将停止脚本...")
                         break
                 case State.Inn:
-                    if runtimeContext._LAPTIME!= 0:
-                        runtimeContext._TOTALTIME = runtimeContext._TOTALTIME + time.time() - runtimeContext._LAPTIME
-                        summary_text = f"已完成{runtimeContext._COUNTERDUNG}次\"{setting._FARMTARGET_TEXT}\"地下城.\n总计{round(runtimeContext._TOTALTIME,2)}秒.上次用时:{round(time.time()-runtimeContext._LAPTIME,2)}秒.\n"
-                        if runtimeContext._COUNTERCHEST > 0:
-                            summary_text += f"箱子效率{round(runtimeContext._TOTALTIME/runtimeContext._COUNTERCHEST,2)}秒/箱.\n累计开箱{runtimeContext._COUNTERCHEST}次,开箱平均耗时{round(runtimeContext._TIME_CHEST_TOTAL/runtimeContext._COUNTERCHEST,2)}秒.\n"
-                        if runtimeContext._COUNTERCOMBAT > 0:
-                            summary_text += f"累计战斗{runtimeContext._COUNTERCOMBAT}次.战斗平均用时{round(runtimeContext._TIME_COMBAT_TOTAL/runtimeContext._COUNTERCOMBAT,2)}秒."
-                        logger.info(f"{runtimeContext._IMPORTANTINFO}{summary_text}",extra={"summary": True})
-                        tg_bot.send_message(f"{runtimeContext._IMPORTANTINFO}{summary_text}")
-                    runtimeContext._LAPTIME = time.time()
-                    runtimeContext._COUNTERDUNG+=1
+                    DungeonCompletionCounter()
                     if not runtimeContext._MEET_CHEST_OR_COMBAT:
-                        logger.info("因为没有遇到战斗或宝箱, 跳过恢复")
+                        logger.info("因为没有遇到战斗或宝箱, 跳过住宿.")
                     elif not setting._ACTIVE_REST:
-                        logger.info("因为面板设置, 跳过恢复")
+                        logger.info("因为面板设置, 跳过住宿.")
                     elif ((runtimeContext._COUNTERDUNG-1) % (setting._RESTINTERVEL+1) != 0):
                         logger.info("还有许多地下城要刷. 面具男, 现在还不能休息哦.")
                     else:
@@ -2448,26 +2484,28 @@ def Factory():
                     RestartableSequenceExecution(
                         lambda: StateEoT()
                         )
-                    RestartableSequenceExecution(
-                        lambda: StateDungeon([TargetInfo('position','左上',[560,928])]),
-                        lambda: FindCoordsOrElseExecuteFallbackAndWait('dungFlag','return',1)
-                    )
-
-                    counter_candelabra = 0
-                    for _ in range(3):
-                        scn = ScreenShot()
-                        if CheckIf(scn,"gaint_candelabra_1") or CheckIf(scn,"gaint_candelabra_2"):
-                            counter_candelabra+=1
-                        Sleep(1)
-                    if counter_candelabra != 0:
-                        logger.info("没发现巨人.")
-                        RestartableSequenceExecution(
-                        lambda: StateDungeon([TargetInfo('harken2','左上')]),
-                        lambda: FindCoordsOrElseExecuteFallbackAndWait('Inn',['returntotown','returnText','leaveDung','dialogueChoices/blessing',[1,1]],2)
-                    )
-                        continue
                     
-                    logger.info("发现了巨人.")
+                    # RestartableSequenceExecution(
+                    #     lambda: StateDungeon([TargetInfo('position','左上',[560,928])]),
+                    #     lambda: FindCoordsOrElseExecuteFallbackAndWait('dungFlag','return',1)
+                    # )
+
+                    # counter_candelabra = 0
+                    # for _ in range(3):
+                    #     scn = ScreenShot()
+                    #     if CheckIf(scn,"gaint_candelabra_1") or CheckIf(scn,"gaint_candelabra_2"):
+                    #         counter_candelabra+=1
+                    #     Sleep(1)
+                    # if counter_candelabra != 0:
+                    #     logger.info("没发现巨人.")
+                    #     RestartableSequenceExecution(
+                    #     lambda: StateDungeon([TargetInfo('harken2','左上')]),
+                    #     lambda: FindCoordsOrElseExecuteFallbackAndWait('Inn',['returntotown','returnText','leaveDung','dialogueChoices/blessing',[1,1]],2)
+                    # )
+                    #     continue
+                    
+                    # logger.info("发现了巨人.")
+                    logger.info("跳过了巨人检测环节. 现在默认总是击杀灯怪.")
                     RestartableSequenceExecution(
                         lambda: StateDungeon([TargetInfo('position','左上',[560,928+54],True),
                                               TargetInfo('harken2','左上')]),
