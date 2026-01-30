@@ -19,7 +19,7 @@ class ConfigPanelApp(tk.Toplevel):
         super().__init__(master_controller)
         self.controller = master_controller
         self.msg_queue = msg_queue
-        self.geometry('550x728')
+        self.geometry('550x793')
         
         self.title(self.TITLE)
 
@@ -163,21 +163,33 @@ class ConfigPanelApp(tk.Toplevel):
         
         self.emu_path_var.trace_add("write", lambda *args: update_adb_status())
         update_adb_status()  # 初始调用
+
+        # 模拟器端口和编号
+        row_counter += 1
+        frame_row = ttk.Frame(self.main_frame)
+        frame_row.grid(row=row_counter, column=0, sticky="ew", pady=5)
         ttk.Label(frame_row, text="端口:").grid(row=0, column=2, sticky=tk.W, pady=5)
         vcmd_non_neg = self.register(lambda x: ((x=="")or(x.isdigit())))
         self.adb_port_entry = ttk.Entry(frame_row,
                                         textvariable=self.adb_port_var,
                                         validate="key",
                                         validatecommand=(vcmd_non_neg, '%P'),
-                                        width=5)
+                                        width=7)
         self.adb_port_entry.grid(row=0, column=3)
+        ttk.Label(frame_row, text="  编号:").grid(row=0, column=4, sticky=tk.W, pady=5)
+        self.emu_index_entry = ttk.Entry(frame_row,
+                                textvariable=self.emu_index_var,
+                                validate="key",
+                                validatecommand=(vcmd_non_neg, '%P'),
+                                width=5)
+        self.emu_index_entry.grid(row=0, column=5)
         self.button_save_adb_port = ttk.Button(
             frame_row,
             text="保存",
             command = self.save_config,
             width=5
             )
-        self.button_save_adb_port.grid(row=0, column=4)
+        self.button_save_adb_port.grid(row=0, column=6)
 
         # 分割线.
         row_counter += 1
@@ -198,7 +210,7 @@ class ConfigPanelApp(tk.Toplevel):
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=5)  # 第二行框架
         self.random_chest_check = ttk.Checkbutton(
             frame_row,
-            text="智能开箱(测试版)",
+            text="快速开箱",
             variable=self.randomly_open_chest_var,
             command=self.save_config,
             style="Custom.TCheckbutton"
@@ -440,6 +452,18 @@ class ConfigPanelApp(tk.Toplevel):
         row_counter += 1
         frame_lux_rest = ttk.Frame(self.main_frame)
         frame_lux_rest.grid(row=row_counter, column=0, sticky="ew", pady=5)
+        self.active_beg_money = ttk.Checkbutton(
+            frame_lux_rest,
+            variable=self.active_beg_money_var,
+            text="没有火的时候自动找王女要钱",
+            command=checkcommand,
+            style="Custom.TCheckbutton"
+            )
+        self.active_beg_money.grid(row=0, column=0)
+
+        row_counter += 1
+        frame_lux_rest = ttk.Frame(self.main_frame)
+        frame_lux_rest.grid(row=row_counter, column=0, sticky="ew", pady=5)
         self.active_royalsuite_rest = ttk.Checkbutton(
             frame_lux_rest,
             variable=self.active_royalsuite_rest_var,
@@ -472,7 +496,6 @@ class ConfigPanelApp(tk.Toplevel):
             style="Custom.TCheckbutton"
             )
         self.active_csc.grid(row=0, column=0)
-
 
         # 分割线
         row_counter += 1
@@ -621,8 +644,10 @@ class ConfigPanelApp(tk.Toplevel):
             self.button_save_rest_intervel,
             self.karma_adjust_combobox,
             self.adb_port_entry,
+            self.emu_index_entry,
             self.active_triumph,
             self.active_royalsuite_rest,
+            self.active_beg_money,
             self.button_save_adb_port,
             self.active_csc
             ]
