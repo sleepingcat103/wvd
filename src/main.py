@@ -1,6 +1,5 @@
 from gui import *
 import argparse
-from tg import bot as tg_bot
 
 __version__ = '1.10.9' 
 OWNER = "arnold2957"
