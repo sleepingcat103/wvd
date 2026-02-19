@@ -179,6 +179,32 @@
         ]
     },
 
+    "SC-B1F":{
+        "_TYPE":"dungeon",
+        "questName":"[宝箱]人鱼洞B1F byXX",
+        "_TARGETINFOLIST":[
+            ["chest_auto"],
+            ["position","左下",[138,652]]
+        ],
+        "_EOT":[
+            ["press","SC/SC",["EdgeOfTown",[1,1]],1],
+            ["press","SC/SCB1F",[1,1],1]
+        ]
+    },
+
+    "SC-B2F":{
+        "_TYPE":"dungeon",
+        "questName":"[宝箱]人鱼洞B2F",
+        "_TARGETINFOLIST":[
+            ["chest_auto"],
+            ["position","右上", [660,660]]
+        ],
+        "_EOT":[
+            ["press","SC/SC",["EdgeOfTown",[1,1]],1],
+            ["press","SC/SCB2F","input swipe 650 900 650 250",1]
+        ]
+    },
+
     "IWO":{
         "_TYPE":"dungeon",
         "questName":"[宝箱]鬼洞1f 水路出发",

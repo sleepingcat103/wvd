@@ -12,6 +12,7 @@ from threading import Thread,Event
 from pathlib import Path
 import numpy as np
 import copy
+import struct
 from tg import bot as tg_bot
 
 ALL_SKILLS = CC_SKILLS + SECRET_AOE_SKILLS + FULL_AOE_SKILLS + ROW_AOE_SKILLS +  PHYSICAL_SKILLS
@@ -46,6 +47,7 @@ CONFIG_VAR_LIST = [
             ["active_rest_var",             tk.BooleanVar, "_ACTIVE_REST",               True],
             ["active_royalsuite_rest_var",  tk.BooleanVar, "_ACTIVE_ROYALSUITE_REST",    False],
             ["active_triumph_var",          tk.BooleanVar, "_ACTIVE_TRIUMPH",            False],
+            ["active_beautiful_ore_var",    tk.BooleanVar, "_ACTIVE_BEAUTIFUL_ORE",      False],
             ["active_beg_money_var",        tk.BooleanVar, "_ACTIVE_BEG_MONEY",          True],
             ["rest_intervel_var",           tk.IntVar,     "_RESTINTERVEL",              0],
             ["karma_adjust_var",            tk.StringVar,  "_KARMAADJUST",               "+0"],
@@ -170,7 +172,18 @@ def CMDLine(cmd):
     logger.debug(f"cmd命令返回:{result.stdout}\n cmd命令错误:{result.stderr}")
     return result
 
-def CheckAndRecoverDevice(setting : FarmConfig, runtimeContext: RuntimeContext, FORCERESTART = False):
+def GetADBPathFromEmuPath(emu_path):
+        adb_path = emu_path
+        adb_path = adb_path.replace("HD-Player.exe", "HD-Adb.exe") # 蓝叠
+        adb_path = adb_path.replace("MuMuPlayer.exe", "adb.exe") # mumu
+        adb_path = adb_path.replace("MuMuNxDevice.exe", "adb.exe") # mumu
+        if not os.path.exists(adb_path):
+            logger.error(f"adb程序序不存在: {adb_path}")
+            return None
+    
+        return adb_path
+
+def CheckAndRecoverDevice(setting : FarmConfig, runtimeContext: RuntimeContext, FORCE_RESTART_EMU = False, FORCE_RESTART_ADB = False):
     def CheckEmulator():
         result = subprocess.run(
             'tasklist /FO CSV /NH | findstr "MuMuNxDevice.exe MuMuPlayer.exe"',
@@ -183,7 +196,7 @@ def CheckAndRecoverDevice(setting : FarmConfig, runtimeContext: RuntimeContext, 
         check_results_list = [int(task.split('","')[1]) for task in split_results_list if task]
         return check_results_list
     def KillAdb():
-        adb_path = GetADBPath()
+        adb_path = GetADBPathFromEmuPath(setting._EMUPATH)
         try:
             logger.info(f"正在检查并关闭adb...")
             # Windows 系统使用 taskkill 命令
@@ -272,16 +285,7 @@ def CheckAndRecoverDevice(setting : FarmConfig, runtimeContext: RuntimeContext, 
         finally:
             # 重置进程号
             runtimeContext._RUNNING_EMU_PID = None
-    def GetADBPath():
-        adb_path = setting._EMUPATH
-        adb_path = adb_path.replace("HD-Player.exe", "HD-Adb.exe") # 蓝叠
-        adb_path = adb_path.replace("MuMuPlayer.exe", "adb.exe") # mumu
-        adb_path = adb_path.replace("MuMuNxDevice.exe", "adb.exe") # mumu
-        if not os.path.exists(adb_path):
-            logger.error(f"adb程序序不存在: {adb_path}")
-            return None
-    
-        return adb_path
+
     def StartEmulator():
         hd_player_path = setting._EMUPATH
         if not os.path.exists(hd_player_path):
@@ -326,20 +330,24 @@ def CheckAndRecoverDevice(setting : FarmConfig, runtimeContext: RuntimeContext, 
     ####################################
     # 功能实现
 
-    if FORCERESTART:
+    if FORCE_RESTART_EMU:
         KillEmulator()
+        time.sleep(1)
+    
+    if FORCE_RESTART_ADB:
+        KillAdb()
         time.sleep(1)
 
     MAXRETRIES = 20
 
-    adb_path = GetADBPath()
+    adb_path = GetADBPathFromEmuPath(setting._EMUPATH)
 
     for attempt in range(MAXRETRIES):
         logger.info(f"-----------------------\n开始尝试连接adb. 次数:{attempt + 1}/{MAXRETRIES}...")
 
         if attempt == 3:
             logger.info(f"失败次数过多, 尝试关闭adb.")
-            KillAdb(setting)
+            KillAdb()
 
             # 我们不起手就关, 但是如果2次链接还是尝试失败, 那就触发一次强制重启.
         
@@ -362,6 +370,7 @@ def CheckAndRecoverDevice(setting : FarmConfig, runtimeContext: RuntimeContext, 
             if f"127.0.0.1:{setting._ADBPORT}" in result.stdout:
                 logger.info("成功连接到模拟器!")
                 results_list = CheckEmulator()
+                logger.debug(f"{results_list}")
                 if len(results_list)==1:
                     runtimeContext._RUNNING_EMU_PID = int(results_list[0])
                     logger.info(f"模拟器进程号为{runtimeContext._RUNNING_EMU_PID}.")
@@ -487,16 +496,15 @@ def Factory():
                     logger.info(f"Warning: Config has no attribute '{key}' to override")
         return quest
     ##################################################################
-    def ResetDevice():
+    def ResetDevice(force_restart_emu=False, force_restart_adb = False):
         nonlocal setting # 修改device
         nonlocal runtimeContext
-        if device := CheckAndRecoverDevice(setting, runtimeContext):
+        if device := CheckAndRecoverDevice(setting, runtimeContext, force_restart_emu, force_restart_adb):
             setting._ADBDEVICE = device
             logger.info("ADB服务成功启动，设备已连接.")
     def DeviceShell(cmdStr):
-        logger.debug(f"DeviceShell {cmdStr}")
-
         while True:
+            logger.debug(f"DeviceShell {cmdStr}")
             exception = None
             result = None
             completed = Event()
@@ -524,10 +532,16 @@ def Factory():
                     raise exception
                     
                 return result
-            except (TimeoutError, RuntimeError, ConnectionResetError, cv2.error) as e:
+            except ( RuntimeError, ConnectionResetError, cv2.error) as e:
                 logger.warning(f"ADB操作失败 ({type(e).__name__}): {e}")
                 logger.info("ADB操作失败, 尝试重启ADB或模拟器程序...")
                 ResetDevice()
+                time.sleep(1)
+
+                continue
+            except TimeoutError as e:
+                logger.info("ADB超时, 尝试重启ADB或模拟器程序...")             
+                ResetDevice(force_restart_adb=True)
                 time.sleep(1)
 
                 continue
@@ -539,60 +553,74 @@ def Factory():
     def Sleep(t=1):
         time.sleep(t)
     def ScreenShot():
+        t = time.time()
+        # 获取设备序列号，用于构造 adb 命令
+        serial = setting._ADBDEVICE.serial 
+        
         while True:
-            exception = None
-            result = None
-            completed = Event()
-
-            def adb_screencap_thread():
-                nonlocal exception, result
-                try:
-                    result = setting._ADBDEVICE.screencap()
-                except Exception as e:
-                    exception = e
-                finally:
-                    completed.set()
-            
-            thread = Thread(target= adb_screencap_thread)
-            thread.daemon = True
-            thread.start()
-
             try:
-                if not completed.wait(timeout=5):
-                    logger.warning(f"截图超时")
-                    raise TimeoutError(f"截图超时")
-                if exception is not None:
-                    raise exception
+                process_result = subprocess.run(
+                    [GetADBPathFromEmuPath(setting._EMUPATH), '-s', serial, 'exec-out', 'screencap'],
+                    capture_output=True, # 捕获输出
+                    timeout=5            # 设置超时
+                )
                 
-                screenshot = result
-                screenshot_np = np.frombuffer(screenshot, dtype=np.uint8)
+                if process_result.stderr:
+                    logger.error(f"截图命令报错: {process_result.stderr.decode('utf-8', errors='ignore')}")
+                    raise RuntimeError("截图命令报错")
 
-                if screenshot_np.size == 0:
-                    logger.error("截图数据为空！")
-                    raise RuntimeError("截图数据为空")
+                raw_data = process_result.stdout
+                
+                # 解析头部信息 (前12个字节)
+                if len(raw_data) < 12:
+                    logger.error("截图数据不足12字节(无头信息)")
+                    raise RuntimeError("截图数据异常")
+                
+                # struct.unpack 解析二进制: '<'小端序, 'I'无符号整型(4字节)
+                # 前三个整数分别是: 宽度, 高度, 像素格式
+                w, h, fmt = struct.unpack("<III", raw_data[:12])
+                expected_pixels = w * h * 4
+                pixels_data = raw_data[12:]
 
-                image = cv2.imdecode(screenshot_np, cv2.IMREAD_COLOR)
+                if len(pixels_data) == expected_pixels:
+                    pass
+                elif len(pixels_data) > expected_pixels:
+                    # 通常是多了4个字节的结束符，直接切掉尾部多余的
+                    pixels_data = pixels_data[:expected_pixels]
+                else:
+                    logger.error(f"数据长度校验失败: 头部声明 {w}x{h}, 实际收到 {len(pixels_data)}, 期望 {expected_pixels}")
+                    raise RuntimeError("截图数据不完整")
 
-                if image is None:
-                    logger.error("OpenCV解码失败：图像数据损坏")
-                    raise RuntimeError("图像解码失败")
+                image = np.frombuffer(pixels_data, dtype=np.uint8)
+                image = image.reshape((h, w, 4))
+                image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
 
-                if image.shape != (1600, 900, 3):  # OpenCV格式为(高, 宽, 通道)
-                    if image.shape == (900, 1600, 3):
-                        logger.error(f"截图尺寸错误: 当前{image.shape}, 为横屏.")
-                        image = cv2.transpose(image)
-                        restartGame(skipScreenShot = True) # 这里直接重启, 会被外部接收到重启的exception
+                # 注意：现在的 image.shape 已经是 (h, w, 3)
+                current_h, current_w = image.shape[:2]
+               
+                if (current_h, current_w) != (1600, 900):
+                    if (current_h, current_w) == (900, 1600):
+                        logger.error(f"截图尺寸错误: 当前{image.shape}, 检测为横屏.")                        
+                        restartGame(skipScreenShot=True)
                     else:
-                        logger.error(f"截图尺寸错误: 期望(1600,900,3), 实际{image.shape}.")
-                        raise RuntimeError("截图尺寸异常")
+                        logger.error(f"截图尺寸错误: 期望(1600,900), 实际({current_h},{current_w}).")
+                        raise RuntimeError(f"分辨率异常: {current_w}x{current_h}")
 
-                #cv2.imwrite('screen.png', image)
+                # logger.info(f"{time.time()-t}")
+
                 return image
+
+            except subprocess.TimeoutExpired:
+                logger.warning("截图超时 (Subprocess)")
+                logger.info("ADB操作失败, 尝试重启ADB或模拟器程序...")
+                ResetDevice(force_restart_adb=True)
+                
             except Exception as e:
-                logger.debug(f"{e}")
-                if isinstance(e, (AttributeError,RuntimeError, ConnectionResetError, cv2.error)):
-                    logger.info("ADB操作失败, 尝试重启ADB或模拟器程序...")
+                logger.debug(f"截图发生异常: {e}")
+                if isinstance(e, (AttributeError, RuntimeError, ConnectionResetError, cv2.error)):
+                    logger.info("ADB操作失败/数据错误, 尝试重启ADB或模拟器程序...")
                     ResetDevice()
+                time.sleep(1)
     def CheckIf(screenImage, shortPathOfTarget, roi = None, outputMatchResult = False):
         template = LoadTemplateImage(shortPathOfTarget)
         screenshot = screenImage.copy()
@@ -1108,7 +1136,7 @@ def Factory():
         Sleep(1)
         FindCoordsOrElseExecuteFallbackAndWait(['Inn','openworldmap','dungFlag'],[target,press_any_key],1)
         
-    def CursedWheelTimeLeap(tar=None, CSC_symbol=None,CSC_setting = None):
+    def CursedWheelTimeLeap(target="GhostsOfYore", CSC_symbol=None,CSC_setting = None, chapter = 'cursedwheel_impregnableFortress'):
         # CSC_symbol: 是否开启因果? 如果开启因果, 将用这个作为是否点开ui的检查标识
         # CSC_setting: 默认会先选择不接所有任务. 这个列表中储存的是想要打开的因果.
         # 其中的RGB用于缩放颜色维度, 以增加识别的可靠性.
@@ -1116,17 +1144,11 @@ def Factory():
             logger.info(f"因为面板设置, 跳过了调整因果.")
             CSC_symbol = None
 
-        target = "GhostsOfYore"
-        if tar != None:
-            target = tar
-        if setting._ACTIVE_TRIUMPH:
-            target = "Triumph"
-
         logger.info(f"开始时间跳跃, 本次跳跃目标:{target}")
 
         # 调整条目以找到跳跃目标
-        Press(FindCoordsOrElseExecuteFallbackAndWait('cursedWheel',['ruins',[1,1]],1))
-        Press(FindCoordsOrElseExecuteFallbackAndWait('cursedwheel_impregnableFortress',['cursedWheelTapRight','cursedWheel',[1,1]],1))
+        Press(FindCoordsOrElseExecuteFallbackAndWait('cursedWheel',['ruins','startdownload',[1,1]],1))
+        Press(FindCoordsOrElseExecuteFallbackAndWait(chapter,['cursedWheelTapRight','cursedWheel',[1,1]],1))
         if not Press(CheckIf(ScreenShot(),target)):
             DeviceShell(f"input swipe 450 1200 450 200")
             Sleep(2)
@@ -1197,6 +1219,10 @@ def Factory():
             if TryPressRetry(screen):
                     Sleep(2)
 
+            if Press(CheckIf(screen,'startdownload',[[222,901,465,84]])):
+                logger.info("确认, 下载, 确认.")
+                Sleep(2)
+
             identifyConfig = [
                 ('dungFlag',      DungeonState.Dungeon),
                 ('chestFlag',     DungeonState.Chest),
@@ -1227,7 +1253,6 @@ def Factory():
                     return State.Inn,DungeonState.Quit, screen
                 else:
                     logger.info("由于没有遇到任何宝箱或发生任何战斗, 跳过回城.")
-                    DungeonCompletionCounter()
                     return State.EoT,DungeonState.Quit,screen
 
             if pos:=(CheckIf(screen,"openworldmap")):
@@ -1239,7 +1264,6 @@ def Factory():
                     return IdentifyState()
                 else:
                     logger.info("由于没有遇到任何宝箱或发生任何战斗, 跳过回城.")
-                    DungeonCompletionCounter()
                     return State.EoT,DungeonState.Quit,screen
 
             for city in ["City_RoyalCityLuknalia","City_fortress", "City_DHI","City_portTownGrandLegion"]:
@@ -1326,10 +1350,7 @@ def Factory():
                     # logger.info("Corpses strew the screen")
                     Press(CheckIf(screen,'skull'))
                     Sleep(2)
-                if Press(CheckIf(screen,'startdownload')):
-                    logger.info("确认, 下载, 确认.")
-                    # logger.info("")
-                    Sleep(2)
+
                 if Press(CheckIf(screen,'totitle')):
                     logger.info("网络故障警报! 网络故障警报! 返回标题, 重复, 返回标题!")
                     return IdentifyState()
@@ -1866,6 +1887,7 @@ def Factory():
 
                         runtimeContext._STEPAFTERRESTART = True
                     ########### 尝试resume
+                    not_moving = False
                     if runtimeContext._RESUMEAVAILABLE and Press(CheckIf(ScreenShot(),'resume')):
                         logger.info("resume可用. 使用resume.")
                         lastscreen = ScreenShot()
@@ -1874,7 +1896,7 @@ def Factory():
                             _, dungState,screen = IdentifyState()
                             if dungState != DungeonState.Dungeon:
                                 logger.info(f"已退出移动状态. 当前状态为{dungState}.")
-                                break
+                                not_moving = True
                             elif lastscreen is not None:
                                 gray1 = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
                                 gray2 = cv2.cvtColor(lastscreen, cv2.COLOR_BGR2GRAY)
@@ -1883,11 +1905,16 @@ def Factory():
                                 if mean_diff < 0.1:
                                     runtimeContext._RESUMEAVAILABLE = False
                                     logger.info(f"已退出移动状态. 当前状态为{dungState}.")
-                                    break
+                                    not_moving = True
                                 lastscreen = screen
                             if counter == 29:
                                 # 转圈可能 重启.
                                 restartGame()
+                            if not_moving:
+                                break
+                    ########### 如果resume失败且为退出:
+                    if dungState == DungeonState.Quit:
+                        break
                     ########### 如果resume失败且为地下城
                     if dungState == DungeonState.Dungeon:
                         dungState = DungeonState.Map
@@ -1915,12 +1942,12 @@ def Factory():
                                 
                                 if tar == "chest_auto":
                                     lastscreen = ScreenShot()
-                                    if CheckIf(lastscreen,"NoChestCanBeFound"):
+                                    if CheckIf(lastscreen,"NoChestCanBeFound") or CheckIf(lastscreen,"theRouteToTheDestinationCannotBeFound"):
                                         targetInfoList.pop(0)
                                         logger.info(f"退出宝箱搜索.")
                                         return DungeonState.Dungeon
                                     lastscreen = ScreenShot()
-                                    if CheckIf(lastscreen,"NoChestCanBeFound"):
+                                    if CheckIf(lastscreen,"NoChestCanBeFound") or CheckIf(lastscreen,"theRouteToTheDestinationCannotBeFound"):
                                         targetInfoList.pop(0)
                                         logger.info(f"退出宝箱搜索.")
                                         return DungeonState.Dungeon
@@ -2010,7 +2037,6 @@ def Factory():
                         logger.info("即将停止脚本...")
                         break
                 case State.Inn:
-                    DungeonCompletionCounter()
                     if not runtimeContext._MEET_CHEST_OR_COMBAT:
                         logger.info("因为没有遇到战斗或宝箱, 跳过住宿.")
                     elif not setting._ACTIVE_REST:
@@ -2025,6 +2051,7 @@ def Factory():
                         )
                     state = State.EoT
                 case State.EoT:
+                    DungeonCompletionCounter()
                     RestartableSequenceExecution(
                         lambda:StateEoT()
                         )
@@ -2643,20 +2670,42 @@ def Factory():
                     starttime = time.time()
                     runtimeContext._COUNTERDUNG += 1
 
-                    RestartableSequenceExecution(
-                        lambda: CursedWheelTimeLeap()
-                        )
+                    if not setting._ACTIVE_BEAUTIFUL_ORE:
+                        if not setting._ACTIVE_TRIUMPH:                            
+                            logger.info("第一步: 时空跳跃...")
+                            RestartableSequenceExecution(
+                                lambda: CursedWheelTimeLeap()
+                            )
+                            Sleep(10)
+                            logger.info("第二步: 返回要塞...")
+                            RestartableSequenceExecution(
+                                lambda: FindCoordsOrElseExecuteFallbackAndWait('Inn',['returntotown','returnText','leaveDung','dialogueChoices/blessing',[1,1]],2)
+                                )
+                                
+                            logger.info("第三步: 前往王城...")
+                            RestartableSequenceExecution(
+                                lambda:TeleportFromCityToWorldLocation('City_RoyalCityLuknalia','input swipe 450 150 500 150'),
+                                )
+                        else:
+                            logger.info("第一步: 时空跳跃...")
+                            RestartableSequenceExecution(
+                                lambda: CursedWheelTimeLeap(chapter='cursedwheel_impregnableFortress', target="Triumph")
+                            )
+                            Sleep(10)
+                                
+                            logger.info("第三步: 前往王城...")
+                            RestartableSequenceExecution(
+                                lambda:TeleportFromCityToWorldLocation('City_RoyalCityLuknalia','input swipe 450 150 500 150'),
+                                )
 
-                    Sleep(10)
-                    logger.info("第二步: 返回要塞...")
-                    RestartableSequenceExecution(
-                        lambda: FindCoordsOrElseExecuteFallbackAndWait('Inn',['returntotown','returnText','leaveDung','dialogueChoices/blessing',[1,1]],2)
+                    elif setting._ACTIVE_BEAUTIFUL_ORE:
+                        logger.info("第一步: 时空跳跃...")
+                        RestartableSequenceExecution(
+                            lambda: CursedWheelTimeLeap(chapter='cursedwheel_dhi', target="BeautifulOre")
                         )
+                        Sleep(10)
 
-                    logger.info("第三步: 前往王城...")
-                    RestartableSequenceExecution(
-                        lambda:TeleportFromCityToWorldLocation('City_RoyalCityLuknalia','input swipe 450 150 500 150'),
-                        )
+
 
                     logger.info("第四步: 悬赏揭榜")
                     RestartableSequenceExecution(
