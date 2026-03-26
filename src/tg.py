@@ -320,6 +320,23 @@ def main():
     # 以 headless 模式啟動 AppController
     controller = AppController(headless=True, config_path=args.config)
 
+    from utils import RegisterTelegramHandler
+
+    # 以下是純程式碼寫死的前綴列表，只有當訊息以其中之一開頭時才會被轉發到 Telegram
+    TELEGRAM_FORWARD_PREFIXES = [
+        "启动任务",
+        "停止任务",
+        "开始要钱",
+        "ADB",
+        "巫术, 启动!",
+        "快快请起.",
+        "即将停止脚本",
+        "已完成",
+        "👆向上滑动查看重要信息",
+    ]
+
+    RegisterTelegramHandler(bot.send_message, prefixes=TELEGRAM_FORWARD_PREFIXES)
+
     # 啟動 Telegram 輪詢線程
     telegram_thread = Thread(target=start_telegram_polling, args=(controller,), daemon=True)
     telegram_thread.start()

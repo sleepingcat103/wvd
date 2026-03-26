@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import copy
 import struct
-from tg import bot as tg_bot
 
 ALL_SKILLS = CC_SKILLS + SECRET_AOE_SKILLS + FULL_AOE_SKILLS + ROW_AOE_SKILLS +  PHYSICAL_SKILLS
 ALL_SKILLS = [s for s in ALL_SKILLS if s in list(set(ALL_SKILLS))]
@@ -1361,10 +1360,8 @@ def Factory():
                 black = LoadTemplateImage("blackScreen")
                 mean_diff = cv2.absdiff(black, screen).mean()/255
                 if mean_diff<0.02:
-                    tg_bot.send_message(f"警告: 游戏画面长时间处于黑屏中, 即将重启({25-counter})")
                     logger.info(f"警告: 游戏画面长时间处于黑屏中, 即将重启({25-counter})")
             if counter>= 25:
-                tg_bot.send_message(f"看起来遇到了一些非同寻常的情况...重启游戏.")
                 logger.info("看起来遇到了一些非同寻常的情况...重启游戏.")
                 restartGame()
                 counter = 0
@@ -1783,16 +1780,13 @@ def Factory():
                         break
                     gameFrozen_none, result = GameFrozenCheck(gameFrozen_none,scn)
                     if result:
-                        tg_bot.send_message("由于画面卡死, 在state:None中重启.")
                         logger.info("由于画面卡死, 在state:None中重启.")
                         restartGame()
                     MAXTIMEOUT = 400
                     if (runtimeContext._TIME_CHEST != 0 ) and (time.time()-runtimeContext._TIME_CHEST > MAXTIMEOUT):
-                        tg_bot.send_message("由于宝箱用时过久, 在state:None中重启.")
                         logger.info("由于宝箱用时过久, 在state:None中重启.")
                         restartGame()
                     if (runtimeContext._TIME_COMBAT != 0) and (time.time()-runtimeContext._TIME_COMBAT > MAXTIMEOUT):
-                        tg_bot.send_message("由于战斗用时过久, 在state:None中重启.")
                         logger.info("由于战斗用时过久, 在state:None中重启.")
                         restartGame()
                 case DungeonState.Quit:

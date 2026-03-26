@@ -10,6 +10,7 @@ import time
 import multiprocessing
 import numpy as np
 import glob
+import threading
 
 # 基础模块包括:
 # LOGGER. 将输入写入到logger.txt文件中.
@@ -120,8 +121,42 @@ class SummaryLogFilter(logging.Filter):
     def filter(self, record):
         if hasattr(record, 'summary') and record.summary:
             return True
-            
+
         return False
+class TelegramLogHandler(logging.Handler):
+    """将 INFO 级别的日志消息转发到 Telegram bot (异步, 不阻塞调用方)."""
+    def __init__(self, send_fn, prefixes=None):
+        super().__init__(level=logging.INFO)
+        self.send_fn = send_fn
+        self.prefixes = prefixes or []
+
+    def emit(self, record):
+        if record.levelno != logging.INFO:
+            return
+        try:
+            msg = self.format(record)
+            # 如果配置了前缀过滤，则仅当消息以其中之一开头时才转发
+            if self.prefixes:
+                normalized = msg.lstrip()
+                if not any(normalized.startswith(p) for p in self.prefixes):
+                    return
+
+            t = threading.Thread(target=self.send_fn, args=(msg,), daemon=True)
+            t.start()
+        except Exception:
+            self.handleError(record)
+
+def RegisterTelegramHandler(send_fn, prefixes=None):
+    """注册 Telegram 日志处理器，将 INFO 日志转发到 Telegram.
+
+    Args:
+        send_fn: 发送函数 (chat_id, text) -> None
+        prefixes: 可选的前缀列表，仅当日志文本以其中之一开头时才转发。
+                  传入 None 或 [] 表示不做过滤，全部转发。
+    """
+    handler = TelegramLogHandler(send_fn, prefixes=prefixes or [])
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(handler)
 ############################################
 def ResourcePath(relative_path):
     """ 获取资源的绝对路径，适用于开发环境和 PyInstaller 打包环境 """
