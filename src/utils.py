@@ -10,6 +10,7 @@ import time
 import multiprocessing
 import numpy as np
 import glob
+import gettext
 import threading
 
 # 基础模块包括:
@@ -197,30 +198,43 @@ def LoadImage(path):
         logger.error(f"加载图片失败: {str(e)}")
         return None
     return img
+
 ############################################
 CONFIG_FILE = 'config.json'
 def SaveConfigToFile(config_data):
     try:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, ensure_ascii=False, indent=4)
-        logger.info("配置已保存。")
+        logger.info(_("配置已保存。"))
         return True
     except Exception as e:
         logger.error(f"保存配置时发生错误: {e}")
         return False
-def LoadConfigFromFile(config_file_path = CONFIG_FILE):
+def LoadRawConfigFromFile(config_file_path = CONFIG_FILE):
     if config_file_path == None:
         config_file_path = CONFIG_FILE
     return LoadJson((config_file_path))
-def SetOneVarInConfig(var, value):
-    data = LoadConfigFromFile()
-    data[var] = value
+def SetOneVarInGeneralConfig(var, value):
+    data = LoadRawConfigFromFile()
+    data['GENERAL'][var] = value
     SaveConfigToFile(data)
+def GetOneVarInGeneralConfig(var, default_value):
+    data = LoadRawConfigFromFile()
+    if 'GENERAL' in data:
+        if var in data['GENERAL']:
+            return data['GENERAL'][var]
+    else:
+        return default_value
+############################################
+localedir = ResourcePath("locale")
+languae = GetOneVarInGeneralConfig('LANGUAGE', 'zh_CN')
+trans = gettext.translation('messages', localedir, languages=[languae], fallback=True)
+trans.install()
 ###########################################
 CHANGES_LOG = "CHANGES_LOG.md"
 def ShowChangesLogWindow():
     log_window = tk.Toplevel()
-    log_window.title("更新日志")
+    log_window.title(_("更新日志"))
     log_window.geometry("700x500")
 
     log_window.lift()  # 提升到最上层
@@ -314,11 +328,8 @@ def reflectImage(folder):
 
 DIALOG_OPTION_IMAGE_LIST = reflectImage('dialogueChoices')
 
-CC_SKILLS = ['CC/'+img for img in reflectImage(os.path.join('spellskill','CC'))]
-SECRET_AOE_SKILLS = ['SECRET_AOE/'+img for img in reflectImage(os.path.join('spellskill','SECRET_AOE'))]
-FULL_AOE_SKILLS = ['FULL_AOE/'+img for img in reflectImage(os.path.join('spellskill','FULL_AOE'))]
-ROW_AOE_SKILLS = ['ROW_AOE/'+img for img in reflectImage(os.path.join('spellskill','ROW_AOE'))]
-PHYSICAL_SKILLS = ['SINGLE/'+img for img in reflectImage(os.path.join('spellskill','SINGLE'))]
+CHAR_LIST = sorted(list({img.split('_')[0] for img in reflectImage(os.path.join('spellskill', 'char'))}))
+
 ###########################################
 class Tooltip:
     def __init__(self, widget, text):

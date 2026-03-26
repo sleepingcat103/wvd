@@ -1,20 +1,4 @@
 {
-    "GoblinCave":{
-        "_TYPE":"dungeon",
-        "questName":"[酒+善恶]初始深渊哥布林洞窟救圣女",
-        "_TARGETINFOLIST":[
-            ["stair_goblinsNest","右下",[875,867]],
-            ["position","左下",[134,973]],
-            ["position","右下",[286,919]],
-            ["position","右上",[713,341]],
-            ["stair_3","左下",[26,546]],
-            ["harken","右下",null]
-        ],
-        "_EOT":[
-            ["press","beginningAbyss",["EdgeOfTown",[1,1]],1],
-            ["press","caveinZone",[1,1],1]
-        ]
-    },
 
     "Dist":{
         "_TYPE":"dungeon",
@@ -54,20 +38,6 @@
         "_EOT":[
             ["press","impregnableFortress",["EdgeOfTown",[1,1]],1],
             ["press","fortressb1f","input swipe 650 250 650 900",1]
-        ]
-    },
-
-    "DH-entrance":{
-        "_TYPE":"dungeon",
-        "questName":"[宝箱]深雪入口",
-        "_TARGETINFOLIST":[
-            ["position","右下",[872,920]],
-            ["position","右下",[552,865]],
-            ["position","右下",[819,1240]]
-        ],
-        "_EOT":[
-            ["press","DH",["EdgeOfTown",[1,1]],1],
-            ["press","DH-entrance","input swipe 650 250 650 900",1]
         ]
     },
 
@@ -176,32 +146,6 @@
         "_EOT":[
             ["press","DH",["EdgeOfTown",[1,1]],1],
             ["press","DH-R9","input swipe 650 900 650 250",1]
-        ]
-    },
-
-    "SC-B1F":{
-        "_TYPE":"dungeon",
-        "questName":"[宝箱]人鱼洞B1F byXX",
-        "_TARGETINFOLIST":[
-            ["chest_auto"],
-            ["position","左下",[138,652]]
-        ],
-        "_EOT":[
-            ["press","SC/SC",["EdgeOfTown",[1,1]],1],
-            ["press","SC/SCB1F",[1,1],1]
-        ]
-    },
-
-    "SC-B2F":{
-        "_TYPE":"dungeon",
-        "questName":"[宝箱]人鱼洞B2F",
-        "_TARGETINFOLIST":[
-            ["chest_auto"],
-            ["position","右上", [660,660]]
-        ],
-        "_EOT":[
-            ["press","SC/SC",["EdgeOfTown",[1,1]],1],
-            ["press","SC/SCB2F","input swipe 650 900 650 250",1]
         ]
     },
 
@@ -364,21 +308,6 @@
         ]
     },
 
-    "TWC":{
-        "_TYPE":"dungeon",
-        "questName":"[刷怪]魔女洞窟",
-        "_TARGETINFOLIST":[
-            ["position","右上",[340,287]],
-            ["position","左上",[345,929]]
-        ],
-        "_EOT":
-        [
-            ["press","TWC/TWC",["EdgeOfTown",[1,1]],1],
-            ["press","TWC/TWCB1F",[1,1],1]
-        ]
-    },
-
-
     "DOE":{
         "_TYPE":"dungeon",
         "questName":"[矿石]土洞(中/次)",
@@ -404,7 +333,20 @@
             ["DOF_quit"]
         ],
         "_EOT":[
-            ["press","DOF",["EdgeOfTown",[1,1]],1],
+            ["press","DOF",["EdgeOfTown","input swipe 650 250 650 900"],1],
+            ["press","DOFB1F",[1,1],1]
+        ]
+    },
+
+    "DOF_Plus": {
+        "_TYPE":"dungeon",
+        "questName":"[矿石]火洞plus-地图全开",
+        "_TARGETINFOLIST":[
+            ["chest_auto"],
+            ["position","左上",[719,713]]
+        ],
+        "_EOT":[
+            ["press","DOF",["EdgeOfTown","input swipe 650 250 650 900"],1],
             ["press","DOFB1F",[1,1],1]
         ]
     },
@@ -419,18 +361,6 @@
         "_EOT":[
             ["press","DOW",["EdgeOfTown",[1,1]],1],
             ["press","DOWB1F",[1,1],1]
-        ]
-    },
-    "DOF_Plus": {
-        "_TYPE":"dungeon",
-        "questName":"[矿石]火洞plus-地图全开",
-        "_TARGETINFOLIST":[
-            ["chest_auto"],
-            ["position","左上",[719,713]]
-        ],
-        "_EOT":[
-            ["press","DOF",["EdgeOfTown",[1,1]],1],
-            ["press","DOFB1F",[1,1],1]
         ]
     },
 
@@ -463,6 +393,20 @@
         ]
     },
 
+    "DOL_PLUS":{
+        "_TYPE":"dungeon",
+        "questName":"[矿石]光洞plus-地图全开",
+        "_EOT":[
+            ["press","DOL",["EdgeOfTown",[1,1]],1],
+            ["press","DOLB1F",[1,1],1]
+        ],
+        "_TARGETINFOLIST":
+        [
+            ["chest_auto"],
+            ["position", "左下", [26,1078]]
+        ]
+    },
+
     "DOS":{
         "_TYPE":"dungeon",
         "questName":"[矿石]水洞(银/特/上)",
@@ -479,13 +423,22 @@
         ]
     },
 
-    "7000G":{
-        "questName":"[金币]7000G",
-        "_TYPE":"quest"
+    "DOS_PLUS":{
+        "_TYPE":"dungeon",
+        "questName":"[矿石]水洞plus-地图全开",
+        "_EOT":[
+            ["press","DOS",["EdgeOfTown",[1,1]],1],
+            ["press","DOSB1F",[1,1],1]
+        ],
+        "_TARGETINFOLIST":
+        [
+            ["chest_auto"],
+            ["position", "右下", [872,1185]]
+        ]
     },
 
-    "fordraig":{
-        "questName":"[任务]角鹫之剑 fordraig",
+    "7000G":{
+        "questName":"[金币]7000G",
         "_TYPE":"quest"
     },
 
@@ -504,33 +457,34 @@
         "_TYPE":"quest"
     },
 
-    "CaveOfSeperation":{
-        "questName":"[任务]离别洞窟 约定之剑",
+    "jier":{
+        "questName":"[悬赏]吉尔",
         "_TYPE":"quest"
     },
 
     "Scorpionesses":{
-        "questName":"[悬赏+金币]悬赏点数: 蝎女",
+        "questName":"[悬赏]蝎女",
         "_TYPE":"quest"
     },
 
-    "steeltrail":{
-        "questName":"[酒]钢试炼",
-        "_TYPE":"quest"
-    },
-
-    "jier":{
-        "questName":"[刷怪]悬赏点数: 吉尔",
+    "Scorpionesses_plus_6_hands":{
+        "questName":"[悬赏]蝎女+风暴六手",
         "_TYPE":"quest"
     },
 
     "gaintKiller":{
         "questName":"[刷怪]要塞7f刷巨人",
-        "_TYPE":"quest",
-        "_SPELLSEQUENCE":{
-            "LACONES":["LACONES","LACONES","LACONES","defend"],
-            "居合":["defend","居合"]
-        }
+        "_TYPE":"quest"
+    },
+    
+    "lovesleep":{
+        "questName":"[刷药]喜欢睡觉",
+        "_TYPE":"quest"
+    },
+
+    "test":{
+        "questName":"测试",
+        "_TYPE":"quest"
     }
 
 }

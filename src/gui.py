@@ -5,9 +5,41 @@ import logging
 from script import *
 from auto_updater import *
 from utils import *
-
+############################################
+def BLOCK_WHEEL(event):
+    # 向上查找第一个 Canvas 类型的控件
+    widget = event.widget
+    while widget is not None and not isinstance(widget, tk.Canvas):
+        widget = widget.master
+    if widget is None:
+        return  # 找不到 Canvas，忽略
+    # 滚动找到的 Canvas
+    if event.num == 4:
+        widget.yview_scroll(-1, 'units')
+    elif event.num == 5:
+        widget.yview_scroll(1, 'units')
+    else:
+        widget.yview_scroll(-1 * (event.delta // 120), 'units')
+    return 'break'
 ############################################
 class ScrollableFrame(ttk.Frame):
+    def _is_on_combobox(self, widget):
+        """递归判断给定控件或其父级是否为 Combobox"""
+        try:
+            # 如果 widget 是字符串，尝试转换为控件对象
+            if isinstance(widget, str):
+                widget = self.nametowidget(widget)
+        except:
+            return False  # 无法获取控件，假设不是 Combobox
+
+        while widget:
+            try:
+                if widget.winfo_class() == 'TCombobox':
+                    return True
+                widget = widget.master
+            except:
+                break
+        return False
     def __init__(self, container, height=None, *args, **kwargs):
         super().__init__(container, *args, **kwargs)
         
@@ -25,9 +57,9 @@ class ScrollableFrame(ttk.Frame):
         
         self.scrollable_frame.bind("<Configure>", self._on_frame_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        for class_name in ["Frame","TFrame","Button", "TButton", "Label","TLabel","Checkbutton","TCheckbutton","CollapsibleSection", "Entry","TEntry"]:
+            self.canvas.bind_class(class_name, "<MouseWheel>", self._on_mousewheel)
 
-    # ... (其余方法 _on_frame_configure, _on_canvas_configure, _check_scroll_necessity, _on_mousewheel 保持不变) ...
     def _on_frame_configure(self, event=None):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self._check_scroll_necessity()
@@ -45,6 +77,18 @@ class ScrollableFrame(ttk.Frame):
             self.scrollbar.pack(side="right", fill="y")
 
     def _on_mousewheel(self, event):
+        # 检查事件是否发生在当前顶层窗口内
+        try:
+            toplevel = event.widget.winfo_toplevel()
+        except AttributeError:
+            # 如果无法获取顶层窗口，可能事件来自外部，忽略
+            return
+        if toplevel != self.winfo_toplevel():
+            return
+        # 检查是否在 Combobox 上
+        if self._is_on_combobox(event.widget):
+            return
+        # 执行滚动
         canvas_height = self.canvas.winfo_height()
         content_height = self.scrollable_frame.winfo_reqheight()
         if content_height > canvas_height:
@@ -52,7 +96,7 @@ class ScrollableFrame(ttk.Frame):
 
 class CollapsibleSection(tk.Frame):
     def __init__(self, parent, title="", expanded=False,bg_color=None, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs)
+        super().__init__(parent, class_='CollapsibleSection',*args, **kwargs)
         self.columnconfigure(0, weight=1)
         
         self.is_expanded = expanded
@@ -65,7 +109,7 @@ class CollapsibleSection(tk.Frame):
         self.header_frame = tk.Frame(self, bg=self.bg_color)
         self.header_frame.pack(fill="x", pady=2)
         
-        self.label = tk.Label(self.header_frame, text=title, font=("微软雅黑", 11, "bold"),bg=self.bg_color)
+        self.label = tk.Label(self.header_frame, text=title, font=("微软雅黑", 13, "bold"),bg=self.bg_color)
         self.label.pack(side="left", padx=5)
         
         # 2. 根据初始状态决定图标
@@ -91,68 +135,63 @@ class CollapsibleSection(tk.Frame):
             self.toggle_btn.configure(text=self.close_emoji)
             self.is_expanded = True
 
-    def toggle(self):
-        if self.is_expanded:
-            # 当前是展开的 -> 执行折叠
-            self.content_frame.pack_forget()     # 隐藏内容
-            self.toggle_btn.configure(text=self.showmore_emoji)  # 按钮变回"折叠态"图标
-            self.is_expanded = False
-        else:
-            # 当前是折叠的 -> 执行展开
-            # 注意: before=self.spacer 保证内容在底部分隔线之上
+    def show(self):
+        if not self.is_expanded:
             self.content_frame.pack(fill="x", expand=True, padx=5, pady=2, before=self.spacer)
-            self.toggle_btn.configure(text=self.close_emoji)  # 按钮变为"展开态"图标
+            self.toggle_btn.configure(text=self.close_emoji)
             self.is_expanded = True
 
 class SkillConfigPanel(CollapsibleSection):
     def __init__(self,
                  parent,
-                 title="技能配置组",
+                 title=_("技能配置组"),
                  on_delete=None,
                  init_config=None,
                  on_name_change=None,
+                 on_config_change = None,
                  **kwargs):
         self.bg_color = "#FFFFFF"
-        super().__init__(parent, title=title, expanded=True, bg_color=self.bg_color, **kwargs)
+        super().__init__(parent, title=title, expanded=False, bg_color=self.bg_color, **kwargs)
         self.configure(
             relief=tk.GROOVE,
             borderwidth=2,
         )
 
         self.on_delete = on_delete
-        self.on_name_change = on_name_change  # 存储回调函数
+        self.on_name_change = on_name_change
+        self.on_config_change = on_config_change
 
         self.custom_rows_data = []
         self.default_row_data = {}
         
         # 常量
-        self.ROLE_LIST = ['alice', 'bob', 'camila']
-        self.SKILL_OPTIONS = ["左上技能", "右上技能", "左下技能", "右下技能", "防御", "双击自动"]
-        self.TARGET_OPTIONS = ["左上", "中上", "右上", "左下", "右下", "中下", "低生命值", "不可用"]
+        self.ROLE_LIST = CHAR_LIST
+        self.SKILL_OPTIONS = [_("左上技能"), _("右上技能"), _("左下技能"), _("右下技能"), _("防御"), _("双击自动")]
+        self.TARGET_OPTIONS = [_("左上角色"), _("中上角色"), _("右上角色"), _("左下角色"), _("右下角色"), _("中下角色"), _("不可用")]
         self.SKILL_LVL = [1, 2, 3, 4, 5, 6, 7]
-        self.FREQ_OPTIONS = ["每场战斗仅一次", "每次启动仅一次", "重复"]
+        self.FREQ_OPTIONS = [_("每场战斗仅一次"), _("每次副本仅一次"), _("每次启动仅一次"), _("重复")]
 
-        # 直接构建正文 UI
-        self._setup_body_ui()
+        # 用初始化内容构建
+        self._setup_body_ui(init_config)
         
-        # 如果有初始化配置，应用它
-        if init_config:
-            self._apply_init_config(init_config)
+    def _setup_body_ui(self,init_config=None):
+        # --- 1. 功能按钮 ---
+        if init_config!=None and ('group_name' in init_config) and (init_config['group_name']==_("全自动战斗")):
+            pass
+        else:
+            action_bar = tk.Frame(self.content_frame, background=self.bg_color)
+            action_bar.pack(fill=tk.X, pady=(0, 5))
 
-    def _setup_body_ui(self):
-        action_bar = tk.Frame(self.content_frame, background=self.bg_color)
-        action_bar.pack(fill=tk.X, pady=(0, 5))
+            btn_add = ttk.Button(action_bar, text=_("➕新增角色"), command=self.add_custom_row, width=9.5)
+            btn_add.pack(side=tk.LEFT)
+            
+            btn_del = ttk.Button(action_bar, text=_("🗑删除此组"), command=self.delete_panel, width=9.5)
+            btn_del.pack(side=tk.RIGHT)
 
-        btn_add = ttk.Button(action_bar, text="➕新增角色", command=self.add_custom_row, width=9.5)
-        btn_add.pack(side=tk.LEFT)
-        
-        btn_del = ttk.Button(action_bar, text="🗑删除此组", command=self.delete_panel, width=9.5)
-        btn_del.pack(side=tk.RIGHT)
+            btn_edit = ttk.Button(action_bar, text=_("✎重命名"), command=self.edit_title, width=9.5)
+            btn_edit.pack(side=tk.RIGHT, padx=(5, 0))
 
-        btn_edit = ttk.Button(action_bar, text="✎重命名", command=self.edit_title, width=7)
-        btn_edit.pack(side=tk.RIGHT, padx=(5, 0))
-
-        ttk.Separator(self.content_frame, orient='horizontal').pack(fill='x', pady=2)
+            ttk.Separator(self.content_frame, orient='horizontal').pack(fill='x', pady=2)
 
         # --- 2. 卡片容器 ---
         self.cards_container = tk.Frame(self.content_frame, background=self.bg_color)
@@ -163,49 +202,49 @@ class SkillConfigPanel(CollapsibleSection):
         self.default_row_frame.pack(fill=tk.X)
         self.default_row_data = self._create_card_widget(self.default_row_frame, is_default=True)
 
-    def _apply_init_config(self, init_config):
-        """根据外部JSON配置初始化面板"""
-        # 1. 设置组名
-        if 'group_name' in init_config:
-            self.label.config(text=init_config['group_name'])
-        
-        # 2. 清空已有的自定义行（如果有的话）
-        for row in self.custom_rows_data:
-            row['frame'].destroy()
-        self.custom_rows_data.clear()
-        
-        # 3. 创建新的自定义行
-        if 'skill_settings' in init_config:
-            skill_settings = init_config['skill_settings']
+        # 初始化内容
+        if init_config:
+            # 1. 清空已有的自定义行
+            for row in self.custom_rows_data:
+                row['frame'].destroy()
+            self.custom_rows_data.clear()
+
+            # 2. 设置组名
+            if 'group_name' in init_config:
+                self.label.config(text=init_config['group_name'])
             
-            for setting in skill_settings:
-                # 创建新的自定义行
-                wrapper_frame = tk.Frame(self.cards_container)
-                wrapper_frame.pack(fill=tk.X, pady=3, before=self.default_row_frame)
-                row_data = self._create_card_widget(wrapper_frame, is_default=False)
-                self.custom_rows_data.append(row_data)
+            # 3. 创建新的自定义行
+            if 'skill_settings' in init_config:
+                skill_settings = init_config['skill_settings']
                 
-                # 设置配置值
-                role = setting.get('role_var', '')
-                if role in self.ROLE_LIST:
-                    row_data['role_var'].set(role)
-                else:
-                    row_data['role_var'].set(self.ROLE_LIST[0])
+                for setting in skill_settings:
+                    # 创建新的自定义行
+                    wrapper_frame = tk.Frame(self.cards_container)
+                    wrapper_frame.pack(fill=tk.X, pady=3, before=self.default_row_frame)
+                    row_data = self._create_card_widget(wrapper_frame, is_default=False)
+                    self.custom_rows_data.append(row_data)
                     
-                row_data['skill_var'].set(setting.get('skill_var', '左上技能'))
-                row_data['target_var'].set(setting.get('target_var', '低生命值'))
-                row_data['freq_var'].set(setting.get('freq_var', '重复'))
-                row_data['lvl_var'].set(setting.get('skill_lvl', 1))
-                
-                # 触发技能变更检查（如果需要禁用目标选择）
-                self._on_skill_change(row_data)
+                    # 设置配置值
+                    role = setting.get('role_var', '')
+                    if role in self.ROLE_LIST:
+                        row_data['role_var'].set(role)
+                    else:
+                        row_data['role_var'].set(self.ROLE_LIST[0])
+                        
+                    row_data['skill_var'].set(setting.get('skill_var', _("左上技能")))
+                    row_data['target_var'].set(setting.get('target_var', _('低生命值')))
+                    row_data['freq_var'].set(setting.get('freq_var', _('重复')))
+                    row_data['lvl_var'].set(setting.get('skill_lvl', 1))
+                    
+                    # 触发技能变更检查
+                    self._on_skill_change(row_data)
+        return
 
     # --- 功能实现 ---
-
     def edit_title(self):
         """修改标题"""
         current_title = self.label.cget("text")
-        new_title = simpledialog.askstring("重命名", "修改配置组名称:", initialvalue=current_title, parent=self)
+        new_title = simpledialog.askstring(_("重命名"), _("修改配置组名称:"), initialvalue=current_title, parent=self)
         
         if new_title and new_title != current_title:
             # 如果有回调函数，先调用它
@@ -216,19 +255,27 @@ class SkillConfigPanel(CollapsibleSection):
             
             # 修改成功，更新标签
             self.label.config(text=new_title)
+            
+        if self.on_config_change:
+            self.on_config_change()
 
     def delete_panel(self):
         """删除整个面板"""
-        if messagebox.askyesno("确认删除", f"确定要删除【{self.label.cget('text')}】吗？"):
+        if messagebox.askyesno(_("确认删除"), _("确定要删除[%s]吗？") % self.label.cget('text')):
             if self.on_delete:
                 self.on_delete(self)
             self.destroy()
+        if self.on_config_change:
+            self.on_config_change()
 
     def add_custom_row(self):
         wrapper_frame = tk.Frame(self.cards_container)
         wrapper_frame.pack(fill=tk.X, pady=3, before=self.default_row_frame)
         row_data = self._create_card_widget(wrapper_frame, is_default=False)
         self.custom_rows_data.append(row_data)
+
+        if self.on_config_change:
+            self.on_config_change()
 
     def _create_card_widget(self, parent, is_default=False):
         # (保持原有的卡片创建逻辑，无变化)
@@ -248,7 +295,7 @@ class SkillConfigPanel(CollapsibleSection):
         row_frame.grid(row=row_counter, sticky=tk.EW)
 
         if is_default:
-            role_var.set("默认")
+            role_var.set(_("默认"))
             role_cb = ttk.Combobox(row_frame, textvariable=role_var, width=8, state="disabled")
         else:
             role_var.set(self.ROLE_LIST[0])
@@ -259,7 +306,7 @@ class SkillConfigPanel(CollapsibleSection):
         skill_cb.grid(row=0, column=1, padx=(0, 5), sticky=tk.W)
         
         if is_default:
-            skill_var.set("双击自动")
+            skill_var.set(_("双击自动"))
             skill_cb.config(state="disabled")
         else:
             skill_cb.current(0)
@@ -268,7 +315,7 @@ class SkillConfigPanel(CollapsibleSection):
         freq_cb.grid(row=0, column=2, sticky=tk.W)
         
         if is_default:
-            freq_var.set("重复")
+            freq_var.set(_("重复"))
             freq_cb.config(state="disabled")
         else:
             freq_cb.current(2)
@@ -277,24 +324,24 @@ class SkillConfigPanel(CollapsibleSection):
         row_frame = tk.Frame(card)
         row_frame.grid(row=row_counter, sticky=tk.EW)
 
-        tk.Label(row_frame, text="治疗:", font=("微软雅黑", 9), bg=card_bg).grid(row=0, column=0, sticky=tk.E, pady=(5, 0))
+        tk.Label(row_frame, text=_("治疗:"), font=("微软雅黑", 9), bg=card_bg).grid(row=0, column=0, sticky=tk.E, pady=(5, 0))
         target_cb = ttk.Combobox(row_frame, textvariable=target_var, values=self.TARGET_OPTIONS, width=7, state="readonly")
         target_cb.grid(row=0, column=1, sticky=tk.W, padx=(0, 5), pady=(5, 0))
 
-        tk.Label(row_frame, text="等级:", font=("微软雅黑", 9), bg=card_bg).grid(row=0, column=2, sticky=tk.E, pady=(5, 0))
+        tk.Label(row_frame, text=_("等级:"), font=("微软雅黑", 9), bg=card_bg).grid(row=0, column=2, sticky=tk.E, pady=(5, 0))
         skill_lvl = ttk.Combobox(row_frame, textvariable=lvl_var, values=self.SKILL_LVL, width=5, state="readonly")
         skill_lvl.grid(row=0, column=3, sticky=tk.W, padx=(0, 5), pady=(5, 0))
         
         if is_default:
-            target_var.set("不可用")
+            target_var.set(_("不可用"))
             lvl_var.set(1)
             target_cb.config(state="disabled")
             skill_lvl.config(state="disabled")
-            tk.Label(row_frame, text="[默认]", font=("微软雅黑", 9), bg=card_bg).grid(row=0, column=4, sticky=tk.E, pady=(5, 0))
+            tk.Label(row_frame, text=_("[默认]"), font=("微软雅黑", 9), bg=card_bg).grid(row=0, column=4, sticky=tk.E, pady=(5, 0))
         else:
             target_cb.current(6)
             skill_lvl.current(0)  # 默认选择第1级
-            del_btn = ttk.Button(row_frame, text="取消", width=6, command=lambda: self._remove_row(parent))
+            del_btn = ttk.Button(row_frame, text=_("取消"), width=6, command=lambda: self._remove_row(parent))
             del_btn.grid(row=0, column=4, sticky=tk.E, pady=(5, 0))
 
         row_data = {
@@ -307,8 +354,12 @@ class SkillConfigPanel(CollapsibleSection):
         }
 
         if not is_default:
-            skill_cb.bind("<<ComboboxSelected>>", lambda e: self._on_skill_change(row_data))
             self._on_skill_change(row_data)
+            role_cb.bind("<<ComboboxSelected>>", lambda e: self.on_config_change and self.on_config_change())
+            skill_cb.bind("<<ComboboxSelected>>", lambda e: [self._on_skill_change(row_data), self.on_config_change and self.on_config_change()])
+            target_cb.bind("<<ComboboxSelected>>", lambda e: self.on_config_change and self.on_config_change())
+            freq_cb.bind("<<ComboboxSelected>>", lambda e: self.on_config_change and self.on_config_change())
+            skill_lvl.bind("<<ComboboxSelected>>", lambda e: self.on_config_change and self.on_config_change())
 
         return row_data
 
@@ -316,17 +367,20 @@ class SkillConfigPanel(CollapsibleSection):
         frame_obj.destroy()
         self.custom_rows_data = [r for r in self.custom_rows_data if r['frame'] != frame_obj]
 
+        if self.on_config_change:
+            self.on_config_change()
+
     def _on_skill_change(self, row_data):
         current_skill = row_data['skill_var'].get()
-        LOCK_TRIGGERS = ["防御", "双击自动"]
+        LOCK_TRIGGERS = [_("防御"), _("双击自动")]
         if current_skill in LOCK_TRIGGERS:
-            row_data['target_var'].set("不可用")
+            row_data['target_var'].set(_("不可用"))
             row_data['target_widget'].config(state="disabled")
             # 对于锁定技能，也禁用技能等级选择
             row_data['skill_lvl'].config(state="disabled")
         else:
-            if row_data['target_var'].get() == "不可用":
-                row_data['target_var'].set("低生命值")
+            if row_data['target_var'].get() == _("不可用"):
+                row_data['target_var'].set(_("低生命值"))
             row_data['target_widget'].config(state="readonly")
             # 对于非锁定技能，启用技能等级选择
             row_data['skill_lvl'].config(state="readonly")
@@ -352,11 +406,48 @@ class SkillConfigPanel(CollapsibleSection):
             'skill_settings': skill_settings
         }
 ############################################
+def LoadSettingFromDict(input_dict):
+    setting = FarmConfig()
+
+    for category, attr_name, var_type, default_value in CONFIG_VAR_LIST:
+        if attr_name not in input_dict:
+            setattr(setting, attr_name, default_value)
+        else:
+            setattr(setting, attr_name, input_dict[attr_name])
+
+    return setting
+def LoadConfig(specific = 'ALL'):
+    raw_config = LoadRawConfigFromFile() or {}
+    general_config = raw_config.get("GENERAL", {})
+
+    task_specific = general_config.get("TASK_SPECIFIC_CONFIG", False)
+    farm_target = general_config.get("FARM_TARGET")
+
+    if task_specific and farm_target and farm_target in raw_config:
+        # 任务特定模式：从对应任务字典加载
+        task_config = raw_config.get(farm_target, {})
+    else:
+        # 非任务特定模式或目标无效：从 DEFAULT 加载
+        task_config = raw_config.get("DEFAULT", {})
+
+    if specific == "ALL":
+        result_config = {}
+        result_config.update(general_config)   # 先添加通用配置
+        result_config.update(task_config)
+    elif specific == "general":
+        result_config = general_config
+    elif specific == "specific":
+        result_config = raw_config.get(farm_target, {})
+    elif specific == "default":
+        result_config = raw_config.get("DEFAULT", {})
+
+    return result_config
+############################################
 class ConfigPanelApp(tk.Toplevel):
     def __init__(self, master_controller, version, msg_queue):
         self.URL = "https://github.com/arnold2957/wvd"
-        self.TITLE = f"WvDAS 巫术daphne自动刷怪 v{version} @德德Dellyla(B站)"
-        self.INTRODUCTION = f"遇到问题? 请访问:\n{self.URL} \n或加入Q群: 922497356."
+        self.TITLE = _("WvDAS 巫术daphne自动刷怪 v%s @德德Dellyla(B站)") % version
+        self.INTRODUCTION = _("遇到问题? 请访问:\n%s \n或加入Q群: 922497356.") % self.URL
 
         RegisterQueueHandler()
         StartLogListener()
@@ -364,9 +455,13 @@ class ConfigPanelApp(tk.Toplevel):
         super().__init__(master_controller)
         self.controller = master_controller
         self.msg_queue = msg_queue
-        self.geometry('610x750')
+        self.geometry('630x750')
         
         self.title(self.TITLE)
+
+        self.bind_class('TCombobox', '<MouseWheel>', BLOCK_WHEEL)
+        self.bind_class('TCombobox', '<Button-4>', BLOCK_WHEEL)
+        self.bind_class('TCombobox', '<Button-5>', BLOCK_WHEEL)
 
         self.adb_active = False
 
@@ -376,8 +471,11 @@ class ConfigPanelApp(tk.Toplevel):
         # --- 任务状态 ---
         self.quest_active = False
 
+        # --- 任务点 ---
+        self.task_point_vars = {}
+        self.task_point_comboboxes = {}
+
         # --- ttk Style ---
-        #
         self.style = ttk.Style()
         self.style.configure("custom.TCheckbutton")
         self.style.map("Custom.TCheckbutton",
@@ -386,65 +484,76 @@ class ConfigPanelApp(tk.Toplevel):
         self.style.configure("LargeFont.TCheckbutton", font=("微软雅黑", 12,"bold"))
 
         # --- UI 变量 ---
-        self.config = LoadConfigFromFile()
-        for attr_name, var_type, var_config_name, var_default_value in CONFIG_VAR_LIST:
+        config_dict = LoadConfig()
+        for category, attr_name, var_type, default_value in CONFIG_VAR_LIST:
             if issubclass(var_type, tk.Variable):
-                setattr(self, attr_name, var_type(value = self.config.get(var_config_name,var_default_value)))
+                setattr(self, attr_name, var_type(value = (config_dict[attr_name] if (attr_name in config_dict)and(config_dict[attr_name] is not None) else default_value)))
             else:
-                setattr(self, attr_name, var_type(self.config.get(var_config_name,var_default_value)))
-        
-        for btn,_,spellskillList,_,_ in SPELLSEKILL_TABLE:
-            for item in spellskillList:
-                if item not in self._spell_skill_config_internal:
-                    setattr(self,f"{btn}_var",tk.BooleanVar(value = False))
-                    break
-                setattr(self,f"{btn}_var",tk.BooleanVar(value = True))             
+                setattr(self, attr_name, var_type(config_dict[attr_name] if (attr_name in config_dict)and(config_dict[attr_name] is not None) else default_value))  
 
+        # --- 创建组件 ---
         self.create_widgets()
-        self.update_system_auto_combat()
-        self.update_active_rest_state() # 初始化时更新旅店住宿entry.
+        self.updateACTIVE_REST_state() # 初始化时更新旅店住宿entry.
         
 
         logger.info("**********************************")
-        logger.info(f"当前版本: {version}")
+        logger.info(_("当前版本: %s") % version)
         logger.info(self.INTRODUCTION, extra={"summary": True})
         logger.info("**********************************")
         
-        if self.last_version.get() != version:
+        if self.LAST_VERSION.get() != version:
             ShowChangesLogWindow()
-            self.last_version.set(version)
+            self.LAST_VERSION.set(version)
             self.save_config()
-
+    
     def save_config(self):
-        def standardize_karma_input():
-          if self.karma_adjust_var.get().isdigit():
-              valuestr = self.karma_adjust_var.get()
-              self.karma_adjust_var.set('+' + valuestr)
-        standardize_karma_input()
+        # karma
+        if self.KARMA_ADJUST.get().isdigit():
+            valuestr = self.KARMA_ADJUST.get()
+            self.KARMA_ADJUST.set('+' + valuestr)
 
-        emu_path = self.emu_path_var.get()
+        # emu path
+        emu_path = self.EMU_PATH.get()
         emu_path = emu_path.replace("HD-Adb.exe", "HD-Player.exe")
-        self.emu_path_var.set(emu_path)
+        self.EMU_PATH.set(emu_path)
 
-        for attr_name, var_type, var_config_name, _ in CONFIG_VAR_LIST:
-            if issubclass(var_type, tk.Variable):
-                self.config[var_config_name] = getattr(self, attr_name).get()
-        if self.system_auto_combat_var.get():
-            self.config["_SPELLSKILLCONFIG"] = []
+        # farm target
+        if self.FARM_TARGET_TEXT.get() in DUNGEON_TARGETS:
+            self.FARM_TARGET.set(DUNGEON_TARGETS[self.FARM_TARGET_TEXT.get()])
         else:
-            self.config["_SPELLSKILLCONFIG"] = [s for s in ALL_SKILLS if s in list(set(self._spell_skill_config_internal))]
-
-        if self.farm_target_text_var.get() in DUNGEON_TARGETS:
-            self.farm_target_var.set(DUNGEON_TARGETS[self.farm_target_text_var.get()])
-        else:
-            self.farm_target_var.set(None)
+            self.FARM_TARGET.set(None)
         
-        SaveConfigToFile(self.config)
+        ##################
+        existing_config = LoadRawConfigFromFile() or {}
+        other_task_spec_config = {k: v for k, v in existing_config.items()
+                      if (k not in ["GENERAL"]) and (type(v) == dict)}
 
-    def updata_config(self):
-        config = LoadConfigFromFile()
-        if '_KARMAADJUST' in config:
-            self.karma_adjust_var.set(config['_KARMAADJUST'])
+        new_general = {}
+        other_items = {}
+
+        for category, attr_name, var_type, default_value in CONFIG_VAR_LIST:
+            if issubclass(var_type, tk.Variable):
+                value = getattr(self, attr_name).get()
+            else:
+                value = getattr(self, attr_name)
+            if category=='GENERAL':
+                new_general[attr_name] = value
+            else:
+                other_items[attr_name] = value
+
+        new_config = {}
+        new_config["GENERAL"] = new_general
+        for key, value in other_task_spec_config.items():
+            new_config[key] = value
+        
+        task_specific = new_general.get('TASK_SPECIFIC_CONFIG', False)
+        farm_target = new_general.get('FARM_TARGET')
+        if task_specific and farm_target:
+            new_config[farm_target] = other_items
+        else:
+            new_config["DEFAULT"] = other_items
+                
+        SaveConfigToFile(new_config)
 
     def create_widgets(self):
         scrolled_text_formatter = logging.Formatter('%(message)s')
@@ -484,13 +593,12 @@ class ConfigPanelApp(tk.Toplevel):
         # ==========================================
         # 分组 1: 基础设置 & 模拟器
         # ==========================================
-        self.section_emu = CollapsibleSection(content_root, title="模拟器", expanded= False if self.emu_path_var.get() else True,)
+        self.section_emu = CollapsibleSection(content_root, title=_("模拟器"), expanded= False if self.EMU_PATH.get() else True,)
         self.section_emu.pack(fill="x", pady=(0, 5)) # 使用pack垂直堆叠
         
         # 获取折叠板的内容容器
         container = self.section_emu.content_frame 
 
-        # --- 原有逻辑 (微调父容器为 container) ---
         row_counter = 0 
         frame_row = ttk.Frame(container)
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
@@ -498,53 +606,58 @@ class ConfigPanelApp(tk.Toplevel):
         self.adb_status_label = ttk.Label(frame_row)
         self.adb_status_label.grid(row=0, column=0)
         
-        adb_entry = ttk.Entry(frame_row, textvariable=self.emu_path_var)
+        adb_entry = ttk.Entry(frame_row, textvariable=self.EMU_PATH)
         adb_entry.grid_remove()
         
         def selectADB_PATH():
             path = filedialog.askopenfilename(
-                title="选择ADB执行文件",
+                title=_("选择ADB执行文件"),
                 filetypes=[("Executable", "*.exe"), ("All files", "*.*")]
             )
             if path:
-                self.emu_path_var.set(path)
+                self.EMU_PATH.set(path)
                 self.save_config()
 
         self.adb_path_change_button = ttk.Button(
-            frame_row, text="修改", command=selectADB_PATH, width=5
+            frame_row, text=_("修改"), command=selectADB_PATH, width=5
         )
         self.adb_path_change_button.grid(row=0, column=1)
         
         def update_adb_status(*args):
-            if self.emu_path_var.get():
-                self.adb_status_label.config(text="已设置模拟器", foreground="green")
+            if self.EMU_PATH.get():
+                self.adb_status_label.config(text=_("已设置模拟器"), foreground="green")
             else:
-                self.adb_status_label.config(text="未设置模拟器", foreground="red")
+                self.adb_status_label.config(text=_("未设置模拟器"), foreground="red")
         
-        self.emu_path_var.trace_add("write", lambda *args: update_adb_status())
+        self.EMU_PATH.trace_add("write", lambda *args: update_adb_status())
         update_adb_status()
 
         # 端口和编号
         row_counter += 1
         frame_row = ttk.Frame(container)
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
-        ttk.Label(frame_row, text="端口:").grid(row=0, column=2, sticky=tk.W, pady=5)
+        ttk.Label(frame_row, text=_("ADB地址:")).grid(row=0, column=2, sticky=tk.W, pady=5)
         vcmd_non_neg = self.register(lambda x: ((x=="")or(x.isdigit())))
-        self.adb_port_entry = ttk.Entry(frame_row, textvariable=self.adb_port_var, validate="key",
-                                        validatecommand=(vcmd_non_neg, '%P'), width=7)
+        self.adb_port_entry = ttk.Entry(frame_row, textvariable=self.ADB_ADRESS, validate="key",
+                                        width=15)
         self.adb_port_entry.grid(row=0, column=3)
-        ttk.Label(frame_row, text=" 编号:").grid(row=0, column=4, sticky=tk.W, pady=5)
-        self.emu_index_entry = ttk.Entry(frame_row, textvariable=self.emu_index_var, validate="key",
+        self.button_save_adb_port = ttk.Button(frame_row, text=_("保存"), command=self.save_config, width=5)
+        self.button_save_adb_port.grid(row=0, column=4)
+        row_counter += 1
+        frame_row = ttk.Frame(container)
+        frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
+        ttk.Label(frame_row, text=_("模拟器编号:")).grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.emu_index_entry = ttk.Entry(frame_row, textvariable=self.EMU_INDEX, validate="key",
                                          validatecommand=(vcmd_non_neg, '%P'), width=5)
-        self.emu_index_entry.grid(row=0, column=5)
-        self.button_save_adb_port = ttk.Button(frame_row, text="保存", command=self.save_config, width=5)
-        self.button_save_adb_port.grid(row=0, column=6)
+        self.emu_index_entry.grid(row=0, column=1)
+        self.button_save_emu_index = ttk.Button(frame_row, text=_("保存"), command=self.save_config, width=5)
+        self.button_save_emu_index.grid(row=0, column=2)
 
 
         # ==========================================
         # 分组 2: 目标
         # ==========================================
-        self.section_farm = CollapsibleSection(content_root, title="目标",expanded=True)
+        self.section_farm = CollapsibleSection(content_root, title=_("目标"),expanded=True)
         self.section_farm.pack(fill="x", pady=5)
         container = self.section_farm.content_frame
         row_counter = 0
@@ -552,17 +665,102 @@ class ConfigPanelApp(tk.Toplevel):
         # 地下城目标
         frame_row = ttk.Frame(container)
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
-        ttk.Label(frame_row, text="任务目标:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.farm_target_combo = ttk.Combobox(frame_row, textvariable=self.farm_target_text_var, 
-                                              values=list(DUNGEON_TARGETS.keys()), state="readonly")
-        self.farm_target_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
-        self.farm_target_combo.bind("<<ComboboxSelected>>", lambda e: self.save_config())
+            
+        def switch_task_specific_config():
+            if self.TASK_SPECIFIC_CONFIG.get():
+                task_config = LoadConfig("specific")
+            else:
+                task_config = LoadConfig("default")
 
+            for category, attr_name, var_type, default_value in CONFIG_VAR_LIST:
+                if attr_name in task_config:
+                    value = task_config[attr_name]
+                    if issubclass(var_type, tk.Variable):
+                        # 获取或创建变量，然后设置值
+                        if not hasattr(self, attr_name):
+                            # 如果属性不存在，创建默认实例
+                            setattr(self, attr_name, var_type())
+                        getattr(self, attr_name).set(value)
+                    else:
+                        # 非 Variable 类型，直接赋值（假设属性已存在，否则创建）
+                        setattr(self, attr_name, var_type(value if (value is not None) else default_value))
+            
+            # 更新开箱人选的文本
+            open_value = self.WHO_WILL_OPEN_IT.get()
+            self.who_will_open_text_var.set(self.open_chest_mapping.get(open_value, _("随机")))
+
+            # 更新善恶
+            # TODO 暂时不写了 太麻烦了.
+
+            # 任务点, 这里无论如何都要拿specific的设置.
+            specific_config = LoadConfig("specific")
+            if ("TASK_POINT_STRATEGY" in specific_config)and(specific_config["TASK_POINT_STRATEGY"]!=None):
+                self.TASK_POINT_STRATEGY = specific_config["TASK_POINT_STRATEGY"]
+            else:
+                self.TASK_POINT_STRATEGY = {"overall_strategy": _("全自动战斗")}
+
+            if not self.TASK_SPECIFIC_CONFIG.get():
+                self.overall_combo.set(self.DEFAULT_OVERALL_STRATEGY.get())
+                on_switch_overall_update_ui()
+            else:
+                self.overall_combo.set(self.TASK_POINT_STRATEGY['overall_strategy'])
+                on_switch_overall_update_ui()
+
+            self.save_config()
+
+            if self.TASK_SPECIFIC_CONFIG.get():
+                self.section_combat.show()
+
+            color = "#196FBF" if self.TASK_SPECIFIC_CONFIG.get() else "black"
+            for section in [self.section_karma, self.section_combat,self.section_advanced]:
+                section.label.config(fg=color)
+
+            return
+        
+        def close_task_specific_config():
+            self.TASK_SPECIFIC_CONFIG.set(False)
+            switch_task_specific_config()
+            return
+        
+        def delete_task_specific_config():
+            close_task_specific_config()
+            raw_config = LoadRawConfigFromFile() or {}
+    
+            general_config = raw_config.get("GENERAL", {})
+            farm_target = general_config.get("FARM_TARGET")
+            if farm_target and farm_target in raw_config:
+                logger.info(_("删除任务定制的配置文件, 任务为 %s.") % farm_target)
+                del raw_config[farm_target]
+            
+            SaveConfigToFile(raw_config)
+            return
+
+        ttk.Label(frame_row, text=_("任务目标:")).grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.farm_target_combo = ttk.Combobox(frame_row,
+                                              textvariable=self.FARM_TARGET_TEXT, 
+                                              values=list(DUNGEON_TARGETS.keys()),
+                                              state="readonly")
+        self.farm_target_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
+        # self.farm_target_combo.bind("<<ComboboxSelected>>", lambda e: close_task_specific_config()) # 这里用后面的战斗部分的g更新方法覆盖
+
+        row_counter += 1
+        frame_row = ttk.Frame(container)
+        frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
+        self.task_specific_config_check = ttk.Checkbutton(
+            frame_row, text=_("用任务定制的配置文件覆盖默认配置."),
+            variable=self.TASK_SPECIFIC_CONFIG,
+            command=switch_task_specific_config,
+            style="BoldFont.TCheckbutton",
+            )
+        self.task_specific_config_check.grid(row=0, column=0, sticky=tk.W, pady=5)
+
+        self.delete_task_specific_config_button = ttk.Button(frame_row, text=_("清除"), command=delete_task_specific_config, width=5)
+        self.delete_task_specific_config_button.grid(row=0, column=1, sticky=tk.W, pady=5)
 
         # ==========================================
         # 分组 3: 探索
         # ==========================================
-        self.section_karma = CollapsibleSection(content_root, title="探索")
+        self.section_karma = CollapsibleSection(content_root, title=_("探索"))
         self.section_karma.pack(fill="x", pady=5)
         container = self.section_karma.content_frame
         row_counter = 0
@@ -571,217 +769,325 @@ class ConfigPanelApp(tk.Toplevel):
         row_counter += 1
         frame_row = ttk.Frame(container)
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
-        self.random_chest_check = ttk.Checkbutton(frame_row, text="快速开箱", variable=self.randomly_open_chest_var,
-                                                  command=self.save_config, style="Custom.TCheckbutton")
-        self.random_chest_check.grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Label(frame_row, text="| 开箱人选:").grid(row=0, column=1, sticky=tk.W, pady=5)
         
-        self.open_chest_mapping = {0:"随机", 1:"左上", 2:"中上", 3:"右上", 4:"左下", 5:"中下", 6:"右下"}
-        self.who_will_open_text_var = tk.StringVar(value=self.open_chest_mapping.get(self.who_will_open_it_var.get(), "随机"))
+        ttk.Label(frame_row, text=_("开箱人选:")).grid(row=0, column=0, sticky=tk.W, pady=5)
+
+        self.open_chest_mapping = {0:_("随机"), 1:_("左上"), 2:_("中上"), 3:_("右上"), 4:_("左下"), 5:_("中下"), 6:_("右下")}
+        self.who_will_open_text_var = tk.StringVar(value=self.open_chest_mapping.get(self.WHO_WILL_OPEN_IT.get(), _("随机")))
         self.who_will_open_combobox = ttk.Combobox(frame_row, textvariable=self.who_will_open_text_var, 
-                                                   values=list(self.open_chest_mapping.values()), state="readonly", width=4)
-        self.who_will_open_combobox.grid(row=0, column=2, sticky=tk.W, pady=5)
-        
+                                                   values=list(self.open_chest_mapping.values()), state="readonly", width=7)
+        self.who_will_open_combobox.grid(row=0, column=1, sticky=tk.W, pady=5)
         def handle_open_chest_selection(event=None):
             open_chest_reverse_mapping = {v: k for k, v in self.open_chest_mapping.items()}
-            self.who_will_open_it_var.set(open_chest_reverse_mapping[self.who_will_open_text_var.get()])
+            self.WHO_WILL_OPEN_IT.set(open_chest_reverse_mapping[self.who_will_open_text_var.get()])
             self.save_config()
         self.who_will_open_combobox.bind("<<ComboboxSelected>>", handle_open_chest_selection)
+
+        ttk.Label(frame_row, text=" | ").grid(row=0, column=2, sticky=tk.W, pady=5)
+
+        self.random_chest_check = ttk.Checkbutton(frame_row, text=_("快速开箱"), variable=self.QUICK_DISARM_CHEST,
+                                                  command=self.save_config, style="Custom.TCheckbutton")
+        self.random_chest_check.grid(row=0, column=3, sticky=tk.W, pady=5)
 
         # 跳过恢复
         row_counter += 1
         row_recover = tk.Frame(container)
         row_recover.grid(row=row_counter, column=0, columnspan=2, sticky=tk.W, pady=2)
-        self.skip_recover_check = ttk.Checkbutton(row_recover, text="跳过战后恢复", variable=self.skip_recover_var,
+        self.skip_recover_check = ttk.Checkbutton(row_recover, text=_("跳过战后恢复"), variable=self.SKIP_COMBAT_RECOVER,
                                                   command=self.save_config, style="Custom.TCheckbutton")
         self.skip_recover_check.grid(row=0, column=0)
-        self.skip_chest_recover_check = ttk.Checkbutton(row_recover, text="跳过开箱后恢复", variable=self.skip_chest_recover_var,
+        row_counter += 1
+        row_recover = tk.Frame(container)
+        row_recover.grid(row=row_counter, column=0, columnspan=2, sticky=tk.W, pady=2)
+        self.skip_chest_recover_check = ttk.Checkbutton(row_recover, text=_("跳过开箱后恢复"), variable=self.SKIP_CHEST_RECOVER,
                                                         command=self.save_config, style="Custom.TCheckbutton")
-        self.skip_chest_recover_check.grid(row=0, column=1)
+        self.skip_chest_recover_check.grid(row=0, column=0)
+
+        # 特殊恢复
+        row_counter += 1
+        row_recover = tk.Frame(container)
+        row_recover.grid(row=row_counter, column=0, columnspan=2, sticky=tk.W, pady=2)
+        self.recover_when_beginning_check = ttk.Checkbutton(row_recover, text=_("刚进入地下城时恢复一次."), variable=self.RECOVER_WHEN_BEGINNING, command=self.save_config, style="Custom.TCheckbutton")
+        self.recover_when_beginning_check.grid(row=0, column=0)
 
         # 休息设置
         row_counter += 1
         frame_row = ttk.Frame(container)
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
         def checkcommand():
-            self.update_active_rest_state()
+            self.updateACTIVE_REST_state()
             self.save_config()
-        self.active_rest_check = ttk.Checkbutton(frame_row, variable=self.active_rest_var, text="启用旅店休息",
+        self.active_rest_check = ttk.Checkbutton(frame_row, variable=self.ACTIVE_REST, text=_("启用旅店休息"),
                                                  command=checkcommand, style="Custom.TCheckbutton")
         self.active_rest_check.grid(row=0, column=0)
-        ttk.Label(frame_row, text=" | 间隔:").grid(row=0, column=1, sticky=tk.W, pady=5)
-        self.rest_intervel_entry = ttk.Entry(frame_row, textvariable=self.rest_intervel_var, validate="key",
-                                             validatecommand=(vcmd_non_neg, '%P'), width=5)
+        ttk.Label(frame_row, text=_(" | 完成")).grid(row=0, column=1, sticky=tk.W, pady=5)
+        self.rest_intervel_entry = ttk.Entry(frame_row, textvariable=self.REST_INTERVEL, validate="key",
+                                             validatecommand=(vcmd_non_neg, '%P'), width=2)
         self.rest_intervel_entry.grid(row=0, column=2)
-        self.button_save_rest_intervel = ttk.Button(frame_row, text="保存", command=self.save_config, width=4)
-        self.button_save_rest_intervel.grid(row=0, column=3)
+        ttk.Label(frame_row, text=_("次后休息.")).grid(row=0, column=3, sticky=tk.W, pady=5)
+        self.button_save_rest_intervel = ttk.Button(frame_row, text=_("保存"), command=self.save_config, width=4)
+        self.button_save_rest_intervel.grid(row=0, column=4)
 
         # 善恶设置
         row_counter += 1
         frame_row = ttk.Frame(container)
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
-        ttk.Label(frame_row, text=f"善恶:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame_row, text=_("善恶:")).grid(row=0, column=0, sticky=tk.W, pady=5)
         
         # 善恶值逻辑保持不变
-        self.karma_adjust_mapping = {"维持现状": "+0", "恶→中立,中立→善": "+17", "善→中立,中立→恶": "-17"}
-        times = int(self.karma_adjust_var.get())
-        if times == 0: self.karma_adjust_text_var = tk.StringVar(value="维持现状")
-        elif times > 0: self.karma_adjust_text_var = tk.StringVar(value="恶→中立,中立→善")
-        elif times < 0: self.karma_adjust_text_var = tk.StringVar(value="善→中立,中立→恶")
+        self.karma_adjust_mapping = {_("维持现状"): "+0", _("恶→中立,中立→善"): "+17", _("善→中立,中立→恶"): "-17"}
+        times = int(self.KARMA_ADJUST.get())
+        if times == 0: self.karma_adjust_text_var = tk.StringVar(value=_("维持现状"))
+        elif times > 0: self.karma_adjust_text_var = tk.StringVar(value=_("恶→中立,中立→善"))
+        elif times < 0: self.karma_adjust_text_var = tk.StringVar(value=_("善→中立,中立→恶"))
             
         self.karma_adjust_combobox = ttk.Combobox(frame_row, textvariable=self.karma_adjust_text_var,
                                                   values=list(self.karma_adjust_mapping.keys()), state="readonly", width=14)
         self.karma_adjust_combobox.grid(row=0, column=1, sticky=tk.W, pady=5)
         
         def handle_karma_adjust_selection(event=None):
-            karma_adjust_left = int(self.karma_adjust_var.get())
+            karma_adjust_left = int(self.KARMA_ADJUST.get())
             karma_adjust_want = int(self.karma_adjust_mapping[self.karma_adjust_text_var.get()])
             if (karma_adjust_left == 0 and karma_adjust_want == 0) or (karma_adjust_left*karma_adjust_want > 0):
                 return
-            self.karma_adjust_var.set(self.karma_adjust_mapping[self.karma_adjust_text_var.get()])
+            self.KARMA_ADJUST.set(self.karma_adjust_mapping[self.karma_adjust_text_var.get()])
             self.save_config()
         self.karma_adjust_combobox.bind("<<ComboboxSelected>>", handle_karma_adjust_selection)
         
-        ttk.Label(frame_row, text="还需").grid(row=0, column=2, sticky=tk.W, pady=5)
-        ttk.Label(frame_row, textvariable=self.karma_adjust_var).grid(row=0, column=3, sticky=tk.W, pady=5)
-        ttk.Label(frame_row, text="点").grid(row=0, column=4, sticky=tk.W, pady=5)
-
+        ttk.Label(frame_row, text=_("还需")).grid(row=0, column=2, sticky=tk.W, pady=5)
+        ttk.Label(frame_row, textvariable=self.KARMA_ADJUST).grid(row=0, column=3, sticky=tk.W, pady=5)
+        ttk.Label(frame_row, text=_("点")).grid(row=0, column=4, sticky=tk.W, pady=5)
 
         # ==========================================
         # 分组 4: 战斗
         # ==========================================
-        self.section_combat = CollapsibleSection(content_root, title="战斗")
+        self.section_combat = CollapsibleSection(content_root, title=_("战斗"), expanded=self.TASK_SPECIFIC_CONFIG.get())
         self.section_combat.pack(fill="x", pady=5)
-        container = self.section_combat.content_frame
+        self.combat_container = self.section_combat.content_frame
         row_counter = 0
 
-        # 自动战斗
-        self.system_auto_check = ttk.Checkbutton(container, text="启用自动战斗", variable=self.system_auto_combat_var,
-                                                 command=self.update_system_auto_combat, style="LargeFont.TCheckbutton")
-        self.system_auto_check.grid(row=row_counter, column=0, columnspan=2, sticky=tk.W, pady=5)
+        ttk.Label(self.combat_container, text=_("请先选择任务目标")).pack()
 
-        # 仅释放一次AOE
-        row_counter += 1
-        def aoe_once_command():
-            if self.aoe_once_var.get():
-                if self.btn_enable_full_aoe_var.get() != True: self.btn_enable_full_aoe.invoke()
-                if self.btn_enable_secret_aoe_var.get() != True: self.btn_enable_secret_aoe.invoke()
-            self.update_change_aoe_once_check()
+        def save_task_point_strategy_config(event=None):
+            """获取任务点策略配置，格式为：
+            TASK_POINT_STRATEGY = {"overall_strategy": strategy_name, "task_point": {0: strategy_name, 1: strategy_name, ...}}
+            """
+            config = {"overall_strategy": "", "task_point": {}}
+            
+            # 如果还没有创建任务点UI，直接返回空配置
+            if not hasattr(self, 'task_point_vars') or not self.task_point_vars:
+                return config
+            
+            # 获取全程策略
+            if _("全程") in self.task_point_vars:
+                config["overall_strategy"] = self.task_point_vars[_("全程")].get()
+            
+            # 当前为默认模式
+            if not self.TASK_SPECIFIC_CONFIG.get():
+                self.DEFAULT_OVERALL_STRATEGY.set(value = self.task_point_vars[_("全程")].get())
+            
+            # 获取每个任务点的策略（按索引顺序）
+            if self.is_current_task_dungeon:
+                for idx, point in enumerate(self.current_task_points):
+                    if point in self.task_point_vars:
+                        config["task_point"][idx] = self.task_point_vars[point].get()
+            
+            self.TASK_POINT_STRATEGY = config
+
             self.save_config()
-            
-        frame_row = ttk.Frame(container)
-        frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
-        self.aoe_once_check = ttk.Checkbutton(frame_row, text="一场战斗中仅释放", variable=self.aoe_once_var,
-                                              command=aoe_once_command, style="BoldFont.TCheckbutton")
-        self.aoe_once_check.grid(row=0, column=0)
-        self.aoe_custom_time_entry = ttk.Entry(frame_row, textvariable=self.custom_aoe_time_var, validate="key",
-                                               validatecommand=(vcmd_non_neg,'%P'), width=1)
-        self.aoe_custom_time_entry.grid(row=0, column=1)
-        self.aoe_custom_time_label = ttk.Label(frame_row, text="次AOE.", font=("微软雅黑", 9, "bold"))
-        self.aoe_custom_time_label.grid(row=0, column=2)
-        self.button_save_custom_aoe = ttk.Button(frame_row, text="保存", command=self.save_config, width=4)
-        self.button_save_custom_aoe.grid(row=0, column=3)
+            return 
+        def _update_task_points_visibility(show):
+            """控制任务点容器的显示/隐藏，并调整全程标签颜色"""
+            if self.is_current_task_dungeon:
+                if show:
+                    self.task_points_frame.pack(fill=tk.X, pady=5)
+                else:
+                    self.task_points_frame.pack_forget()
 
-        # AOE后自动
-        row_counter += 1
-        self.auto_after_aoe_check = ttk.Checkbutton(container, text="全体AOE后开启自动战斗", variable=self.auto_after_aoe_var,
-                                                    command=self.save_config, style="BoldFont.TCheckbutton")
-        self.auto_after_aoe_check.grid(row=row_counter, column=0, columnspan=2, sticky=tk.W, pady=5)
+            if show:
+                self.overall_label.config(foreground="gray")  # 正常颜色
+            else:
+                self.overall_label.config(foreground="black")   # 灰色
+            return
+        def on_switch_overall_update_ui(event=None):
+            new_selection = self.overall_combo.get()
+            is_custom = (new_selection == _("自定义任务点策略"))
 
-        # 技能按钮
-        row_counter += 1
-        self.skills_button_frame = ttk.Frame(container)
-        self.skills_button_frame.grid(row=row_counter, column=0, columnspan=2, sticky=tk.W)
-        
-        for buttonName, buttonText, buttonSpell, s_row, s_col in SPELLSEKILL_TABLE:
-            setattr(self, buttonName, ttk.Checkbutton(
-                self.skills_button_frame,
-                text=f"启用{buttonText}",
-                variable=getattr(self, f"{buttonName}_var"),
-                command=lambda spell=buttonSpell, btnN=buttonName, btnT=buttonText: self.update_spell_config(spell, btnN, btnT),
-                style="Custom.TCheckbutton"
-            ))
-            getattr(self, buttonName).grid(row=s_row, column=s_col, padx=2, pady=2)
+            if is_custom:
+                if not self.TASK_SPECIFIC_CONFIG.get():
+                    # 弹出确认对话框
+                    answer = messagebox.askyesno(
+                        _("启用任务专用配置"),
+                        _("自定义任务点策略需要使用任务专用的配置文件。是否立即启用任务专用配置？")
+                    )
+                    if answer:
+                        # 用户确认启用
+                        self.TASK_SPECIFIC_CONFIG.set(True)
+                        switch_task_specific_config()   # 调用已有方法更新UI
+                        _update_task_points_visibility(True)
+                        self.last_overall_selection = new_selection
+                    else:
+                        # 用户取消，恢复之前的选择
+                        self.overall_combo.set(self.last_overall_selection)
+                else:
+                    # 已启用任务专用配置，直接显示
+                    _update_task_points_visibility(True)
+                    self.last_overall_selection = new_selection
+            else:
+                # 选择普通策略，隐藏任务点行
+                _update_task_points_visibility(False)
+                self.last_overall_selection = new_selection
+            save_task_point_strategy_config()
+            return
+        def create_task_point_ui():
+            task_name = self.FARM_TARGET.get()
+            if not task_name:
+                return
 
-        # # ==========================================
-        # # 分组 4: 战斗
-        # # ==========================================
-        # self.section_combat_adv = CollapsibleSection(content_root, title="高级战斗")
-        # self.section_combat_adv.pack(fill="x")
-        # container = self.section_combat_adv.content_frame
-        # row_counter = 0
+            # 清空原有内容
+            for widget in self.combat_container.winfo_children():
+                widget.destroy()
 
-        # self.skill_configs = {}
+            # 获取任务点列表
+            try:
+                self.current_task_points = LoadQuest(task_name)._TARGETINFOLIST
+                self.is_current_task_dungeon = (LoadQuest(task_name)._TYPE == 'dungeon')
+            except NameError:
+                logger.error(_('不可用的任务名.'))
+                self.current_task_points = []
 
-        # def on_delete_panel(p):
-        #     """删除面板的回调函数"""
-        #     # 从字典中删除该panel
-        #     if p in self.skill_configs:
-        #         del self.skill_configs[p]
-            
-        #     # 销毁面板
-        #     p.destroy()
-            
-        #     # 如果没有面板了，隐藏容器
-        #     if len(self.skill_configs) == 0:
-        #         self.panels_container.grid_forget()
+            # 获取所有策略面板名称
+            strategy_names = list(self.strategy_panels.values())
 
-        # def on_panel_name_changed(panel, new_name):
-        #     """面板名称改变时的回调"""
-        #     # 检查新名称是否已经存在
-        #     if new_name in self.skill_configs.values() and new_name != self.skill_configs.get(panel):
-        #         messagebox.showerror("错误", f"名称 '{new_name}' 已存在，请使用其他名称")
-        #         return False
-            
-        #     # 更新映射
-        #     self.skill_configs[panel] = new_name
-        #     return True
-        
-        # def get_all_configs():
-        #     """获取所有面板的配置"""
-        #     all_configs = []
-        #     for panel, _ in self.skill_configs.items():
-        #         config = panel.get_config_list()
-        #         all_configs.append(config)
-        #     return all_configs
+            # 重新创建每一行
+            self.task_point_vars = {}
+            self.task_point_comboboxes = {}
+
+            # ---- 1. 创建全程行（单独设计，加粗，带间距） ----
+            overall_frame = ttk.Frame(self.combat_container)
+            overall_frame.pack(fill=tk.X, pady=(0, 10))  # 增加底部间距
+
+            # 全程标签
+            self.overall_label = ttk.Label(overall_frame, text=_("全程"), font=('微软雅黑', 12, 'bold'))
+            self.overall_label.pack(side=tk.LEFT, padx=5)
+
+            # 全程下拉框
+            overall_var = tk.StringVar(value = _("全自动战斗"))
+            if self.is_current_task_dungeon:
+                overall_values = strategy_names + [_("自定义任务点策略")] if strategy_names else [_("自定义任务点策略")]
+            else:
+                overall_values = strategy_names  if strategy_names else [_("全自动战斗")]
+
+            # 设置默认值
+
+            task_point_strategy = getattr(self, 'TASK_POINT_STRATEGY', None)
+            if not self.TASK_SPECIFIC_CONFIG.get(): # 未开启任务定制配置
+                if self.DEFAULT_OVERALL_STRATEGY: # 默认全局配置可用
+                    overall_var.set(self.DEFAULT_OVERALL_STRATEGY.get())
+            else: # 开启任务定制配置
+                if task_point_strategy and isinstance(task_point_strategy, dict):
+                    saved_overall = task_point_strategy.get('overall_strategy')
+                    if saved_overall and saved_overall in overall_values:
+                        overall_var.set(saved_overall)
+                    else:
+                        logger.info(_("当前保存的战斗策略无效, 使用默认策略\"全自动战斗\"."))
+                        overall_var.set(_("全自动战斗."))
+                        
+            # 初始化全程策略
+            self.overall_combo = ttk.Combobox(overall_frame, textvariable=overall_var,
+                                        values=overall_values, state="readonly", width=25)
+            self.overall_combo.pack(side=tk.LEFT, padx=5)
+
+            # 保存全程行相关对象
+            self.task_point_vars[_("全程")] = overall_var
+            self.task_point_comboboxes[_("全程")] = self.overall_combo
+
+            # ---- 2. 创建任务点容器 ----
+
+            if self.is_current_task_dungeon:
+                # 填充任务点行
+                self.task_points_frame = ttk.Frame(self.combat_container)
+                self.task_points_frame.pack(fill=tk.X, pady=5)
+
+                for idx, point in enumerate(self.current_task_points):
+                    row_frame = ttk.Frame(self.task_points_frame)
+                    row_frame.pack(fill=tk.X, pady=2)
+
+                    task_point_var = tk.StringVar()
+                    # 尝试从保存的配置获取该任务点的策略
+                    saved_point_strategy = None
+                    if task_point_strategy and isinstance(task_point_strategy, dict):
+                        task_point_dict = task_point_strategy.get('task_point', {})
+                        if isinstance(task_point_dict, dict):
+                            saved_point_strategy = task_point_dict.get(str(idx))  # 注意索引可能是字符串或整数
+                            if saved_point_strategy is None:
+                                saved_point_strategy = task_point_dict.get(idx)  # 尝试整数键
+                            if saved_point_strategy and saved_point_strategy in strategy_names:
+                                task_point_var.set(saved_point_strategy)
+                            else:
+                                saved_point_strategy = None
+
+                    if saved_point_strategy is None:
+                        # 没有保存或无效，使用默认策略 "全自动战斗"
+                        task_point_var.set(_("全自动战斗"))
+
+                    combo = ttk.Combobox(row_frame, textvariable=task_point_var, values=strategy_names,
+                                        state="readonly", width=15)
+                    combo.bind("<<ComboboxSelected>>", save_task_point_strategy_config)    
+                    combo.pack(side=tk.LEFT, padx=5)
+
+                    point_name = point.target + ((' '+str(point.roi)) if point.target=='position' else '')
+                    ttk.Label(row_frame, text=point_name, width=20, anchor=tk.W).pack(side=tk.LEFT, padx=5)
+
+                    self.task_point_vars[point] = task_point_var
+                    self.task_point_comboboxes[point] = combo
                 
-        # def add_new_panel():
-        #     self.panels_container.grid()
+                logger.info(_("已刷新任务点界面，任务点数量: %s") % len(self.current_task_points))
 
-        #     idx = 1
-        #     while True:
-        #         title = f"队伍配置 {idx}"
-        #         # 检查名称是否已存在
-        #         if title not in self.skill_configs.values():
-        #             break
-        #         idx += 1
+            # ---- 3. 根据全程行初始选择控制任务点容器显示状态 ----
+            _update_task_points_visibility(overall_var.get() == _("自定义任务点策略"))
 
-        #     panel = SkillConfigPanel(
-        #         self.panels_container,
-        #         title=title,
-        #         on_delete=on_delete_panel,
-        #         on_name_change=on_panel_name_changed,
-        #         init_config=None,
-        #     )
-        #     panel.pack(fill=tk.X, pady=2)
-            
-        #     # 将panel和名称添加到映射中
-        #     self.skill_configs[panel] = title
+            # ---- 4. 绑定全程行选择事件 ----
+            self.overall_combo.bind("<<ComboboxSelected>>", on_switch_overall_update_ui)
 
-        # ttk.Button(container, text="➕ 添加新技能配置", command=add_new_panel).grid(row=row_counter, column=0, sticky=tk.W)
+            return
+        def update_combat_strategy_combobox_values():
+            if not hasattr(self, 'task_point_comboboxes') or not self.task_point_comboboxes:
+                return
 
-        # row_counter += 1
-        # container.columnconfigure(0, weight=1)
-        # self.panels_container = tk.Frame(container)
-        # self.panels_container.grid(row=row_counter, column=0, sticky="ew")
+            strategy_names = list(self.strategy_panels.values())
 
-        # # 初始添加一个面板
-        # add_new_panel()
+            for key, combo in self.task_point_comboboxes.items():
+                if key == _("全程"):
+                    new_values = strategy_names + [_("自定义任务点策略")] if strategy_names else [_("自定义任务点策略")]
+                else:
+                    new_values = strategy_names
+
+                current = combo.get()
+                combo['values'] = new_values
+                # 如果当前值不在新列表中，重置为合适值
+                if current not in new_values:
+                    if new_values:
+                        combo.set(new_values[0])
+                    else:
+                        combo.set('')
+
+            if hasattr(self, 'overall_combo'):
+                selected = self.overall_combo.get()
+                show = (selected == _("自定义任务点策略"))
+                _update_task_points_visibility(show)
+            return
+        def on_farm_target_selected(event):
+            close_task_specific_config()
+            create_task_point_ui()
+        self.farm_target_combo.bind("<<ComboboxSelected>>", on_farm_target_selected)
+
+        self.after(200, lambda : [create_task_point_ui(),switch_task_specific_config()])
 
         # ==========================================
-        # 分组 5: 高级
+        # 分组 4: 高级
         # ==========================================
-        self.section_advanced = CollapsibleSection(content_root, title="高级")
+        self.section_advanced = CollapsibleSection(content_root, title=_("高级"))
         self.section_advanced.pack(fill="x", pady=5)
         
         # 获取容器
@@ -793,8 +1099,8 @@ class ConfigPanelApp(tk.Toplevel):
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
         self.active_beg_money = ttk.Checkbutton(
             frame_row,
-            variable=self.active_beg_money_var,
-            text="没有火的时候自动找王女要钱",
+            variable=self.ACTIVE_BEG_MONEY,
+            text=_("没有火的时候自动找王女要钱"),
             command=self.save_config, # 如果这里需要特定逻辑，可以改回 checkcommand
             style="Custom.TCheckbutton"
         )
@@ -806,8 +1112,8 @@ class ConfigPanelApp(tk.Toplevel):
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
         self.active_royalsuite_rest = ttk.Checkbutton(
             frame_row,
-            variable=self.active_royalsuite_rest_var,
-            text="住豪华房",
+            variable=self.ACTIVE_ROYALSUITE_REST,
+            text=_("住豪华房"),
             command=self.save_config,
             style="Custom.TCheckbutton"
         )
@@ -819,8 +1125,8 @@ class ConfigPanelApp(tk.Toplevel):
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
         self.active_triumph = ttk.Checkbutton(
             frame_row,
-            variable=self.active_triumph_var,
-            text="跳跃到\"凯旋\"",
+            variable=self.ACTIVE_TRIUMPH,
+            text=_("跳跃到第三章结局\"凯旋\""),
             command=self.save_config,
             style="Custom.TCheckbutton"
         )
@@ -832,8 +1138,8 @@ class ConfigPanelApp(tk.Toplevel):
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
         self.active_beautiful_ore = ttk.Checkbutton(
             frame_row,
-            variable=self.active_beautiful_ore_var,
-            text="跳跃到\"美丽矿石的真相\"",
+            variable=self.ACTIVE_BEAUTIFUL_ORE,
+            text=_("跳跃到第四章结局\"美丽矿石的真相\""),
             command=self.save_config,
             style="Custom.TCheckbutton"
         )
@@ -845,13 +1151,147 @@ class ConfigPanelApp(tk.Toplevel):
         frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
         self.active_csc = ttk.Checkbutton(
             frame_row,
-            variable=self.active_csc_var,
-            text="尝试调整因果",
+            variable=self.ACTIVE_CSC,
+            text=_("尝试调整因果"),
             command=self.save_config,
             style="Custom.TCheckbutton"
         )
         self.active_csc.grid(row=0, column=0, sticky=tk.W)
+
+        # 5. 最大尝试次数
+        row_counter += 1
+        frame_row = ttk.Frame(container)
+        frame_row.grid(row=row_counter, column=0, sticky="ew", pady=2)
+        def validate_focusout(P):
+            if P == "" or (P.isdigit() and int(P) >= 25):
+                return True
+            else:
+                logger.info(_("尝试次数不能低于25次."))
+                self.MAX_TRY_LIMIT.set(25)
+                return False
+        ttk.Label(frame_row, text=_("状态检查的最大尝试次数:")).grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.max_try_limit_entry = ttk.Entry(frame_row, textvariable=self.MAX_TRY_LIMIT, validate="focusout",
+                                             validatecommand=(self.register(validate_focusout), '%P'), width=3)
+        self.max_try_limit_entry.grid(row=0, column=1)
+        self.button_save_max_try_limit = ttk.Button(frame_row, text=_("保存"), command=self.save_config, width=5)
+        self.button_save_max_try_limit.grid(row=0, column=2)
         
+        # ==========================================
+        # 分组 5: 战斗方案
+        # ==========================================
+        self.section_combat_adv = CollapsibleSection(content_root, title=_("战斗方案"))
+        self.section_combat_adv.pack(fill="x")
+        container = self.section_combat_adv.content_frame
+        row_counter = 0
+
+        self.strategy_panels = {}  # 改为字典 {panel: name}
+
+        def save_strategy():
+            """将当前设置打包并保存"""
+            all_configs = []
+            for panel in self.strategy_panels:  # 遍历字典的键（面板对象）
+                config = panel.get_config_list()
+                all_configs.append(config)
+
+            self.STRATEGY = all_configs
+            self.save_config()
+            # 不需要 return
+        def on_delete_panel(p):
+            """删除面板的回调函数"""
+            # 从字典中删除该panel
+            if p in self.strategy_panels:
+                del self.strategy_panels[p]
+
+            # 销毁面板
+            p.destroy()
+
+            # 更新列表
+            update_combat_strategy_combobox_values()
+
+            # 如果没有面板了，隐藏容器
+            if len(self.strategy_panels) == 0:
+                self.strategy_panels_container.grid_forget()
+
+            save_strategy()
+        def on_panel_name_changed(panel, new_name):
+            """面板名称改变时的回调"""
+            # 检查新名称是否已经存在（排除自身）
+            existing_names = [name for p, name in self.strategy_panels.items() if p != panel]
+            if new_name in existing_names:
+                messagebox.showerror(_("错误"), _("名称 '%s' 已存在，请使用其他名称") % new_name)
+                return False
+
+            # 更新映射
+            self.strategy_panels[panel] = new_name
+
+            # 更新列表
+            update_combat_strategy_combobox_values()
+
+            # 保存
+            save_strategy()
+            return True
+        def add_new_panel(init_config=None):
+            self.strategy_panels_container.grid()
+
+            # 确定标题
+            if init_config and 'group_name' in init_config:
+                title = init_config['group_name']
+                # 检查是否重复（与现有面板名称比较）
+                existing_names = list(self.strategy_panels.values())
+                if title in existing_names:
+                    # 如果名称重复，则添加序号
+                    base_title = title
+                    idx = 1
+                    while f"{base_title} ({idx})" in existing_names:
+                        idx += 1
+                    title = f"{base_title} ({idx})"
+            else:
+                # 生成默认标题
+                idx = 1
+                existing_names = list(self.strategy_panels.values())
+                while (_("策略配置 %s") % idx) in existing_names:
+                    idx += 1
+                title = (_("策略配置 %s") % idx)
+
+            panel = SkillConfigPanel(
+                self.strategy_panels_container,
+                title=title,
+                on_delete=on_delete_panel,
+                on_name_change=on_panel_name_changed,
+                on_config_change=save_strategy,
+                init_config=init_config,
+            )
+            panel.pack(fill=tk.X, pady=2)
+
+            # 将新面板加入字典
+            self.strategy_panels[panel] = title
+
+            # 更新下拉框
+            update_combat_strategy_combobox_values()
+
+            # 保存配置
+            if init_config==None:
+                save_strategy()
+
+            return panel
+
+        ttk.Button(container, text=_("➕ 添加新技能配置"), command=add_new_panel).grid(row=row_counter, column=0, sticky=tk.W)
+
+        row_counter += 1
+        container.columnconfigure(0, weight=1)
+        self.strategy_panels_container = tk.Frame(container)
+        self.strategy_panels_container.grid(row=row_counter, column=0, sticky="ew")
+
+        # 初始化
+        if self.STRATEGY and isinstance(self.STRATEGY, list):
+            # 有保存的策略，逐个创建
+            for config in self.STRATEGY:
+                add_new_panel(init_config=config)
+        else:
+            # 无策略，创建一个默认面板
+            add_new_panel()
+
+        ###################################################################
         # 分割线
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -882,7 +1322,7 @@ class ConfigPanelApp(tk.Toplevel):
             self.toggle_start_stop()
         self.start_stop_btn = ttk.Button(
             button_frame,
-            text="脚本, 启动!",
+            text=_("脚本, 启动!"),
             command=btn_command,
             style='start.TButton',
         )
@@ -898,15 +1338,15 @@ class ConfigPanelApp(tk.Toplevel):
         frame_row_update = tk.Frame(self.main_frame)
         frame_row_update.grid(row=row_counter, column=0, sticky=tk.W)
 
-        self.find_update = ttk.Label(frame_row_update, text="发现新版本:",foreground="red")
+        self.find_update = ttk.Label(frame_row_update, text=_("发现新版本:"),foreground="red")
         self.find_update.grid(row=0, column=0, sticky=tk.W)
 
-        self.update_text = ttk.Label(frame_row_update, textvariable=self.latest_version,foreground="red")
+        self.update_text = ttk.Label(frame_row_update, textvariable=self.LATEST_VERSION,foreground="red")
         self.update_text.grid(row=0, column=1, sticky=tk.W)
 
         self.button_auto_download = ttk.Button(
             frame_row_update,
-            text="自动下载",
+            text=_("自动下载"),
             width=7
             )
         self.button_auto_download.grid(row=0, column=2, sticky=tk.W, padx= 5)
@@ -921,7 +1361,7 @@ class ConfigPanelApp(tk.Toplevel):
                 os.system(f"xdg-open {url}")
         self.button_manual_download = ttk.Button(
             frame_row_update,
-            text="手动下载最新版",
+            text=_("手动下载最新版"),
             command=open_url,
             width=7
             )
@@ -933,103 +1373,22 @@ class ConfigPanelApp(tk.Toplevel):
         self.button_auto_download.grid_remove()
         self.button_manual_download.grid_remove()
 
-    def update_active_rest_state(self):
-        if self.active_rest_var.get():
+    def updateACTIVE_REST_state(self):
+        if self.ACTIVE_REST.get():
             self.rest_intervel_entry.config(state="normal")
             self.button_save_rest_intervel.config(state="normal")
         else:
             self.rest_intervel_entry.config(state="disable")
             self.button_save_rest_intervel.config(state="disable")
 
-    def update_change_aoe_once_check(self):
-        if self.aoe_once_var.get()==False:
-            self.auto_after_aoe_var.set(False)
-            self.auto_after_aoe_check.config(state="disabled")
-            self.button_save_custom_aoe.config(state="disable")
-            self.aoe_custom_time_entry.config(state="disable")
-            self.aoe_custom_time_label.config(state="disable")
-        if self.aoe_once_var.get():
-            self.auto_after_aoe_check.config(state="normal")
-            self.button_save_custom_aoe.config(state="normal")
-            self.aoe_custom_time_entry.config(state="normal")
-            self.aoe_custom_time_label.config(state="normal")
-
-    def update_system_auto_combat(self):
-        is_system_auto = self.system_auto_combat_var.get()
-
-        # 更新技能列表
-        if is_system_auto:
-            self._spell_skill_config_internal = ["systemAuto"]
-        else:
-            if self._spell_skill_config_internal == ["systemAuto"]:
-                self._spell_skill_config_internal = []
-                for buttonName,buttonText,buttonSpell, row, col in SPELLSEKILL_TABLE:
-                    if getattr(self,f"{buttonName}_var").get():
-                        self._spell_skill_config_internal += buttonSpell
-        
-        # 更新其他按钮信息
-        button_state = tk.DISABLED if is_system_auto else tk.NORMAL
-        for buttonName,_,_, _, _ in SPELLSEKILL_TABLE:
-            getattr(self,buttonName).config(state=button_state)
-        self.aoe_once_check.config(state = button_state)
-        self.button_save_custom_aoe.config(state=button_state)
-        self.aoe_custom_time_entry.config(state=button_state)
-        self.aoe_custom_time_label.config(state=button_state)
-        if is_system_auto:
-            self.auto_after_aoe_check.config(state = button_state)
-        else:
-            self.update_change_aoe_once_check()
-        
-        # 更新按钮颜色并保存
-        self.save_config()
-
-    def update_spell_config(self, skills_to_process, buttonName, buttonText):
-        if self.system_auto_combat_var.get():
-            return
-
-        skills_to_process_set = set(skills_to_process)
-
-        if buttonName == "btn_enable_all":
-            if getattr(self,f"{buttonName}_var").get():
-                self._spell_skill_config_internal = sorted(list(skills_to_process_set))
-                logger.info(f"已启用所有技能: {self._spell_skill_config_internal}")
-                for btn,_,_,_,_ in SPELLSEKILL_TABLE:
-                    if btn!=buttonName:
-                        getattr(self,f"{btn}_var").set(True)
-            else:
-                self._spell_skill_config_internal = []
-                for btn,_,_,_,_ in SPELLSEKILL_TABLE:
-                    if btn!=buttonName:
-                        getattr(self,f"{btn}_var").set(False)
-                logger.info("已取消所有技能。")
-        else:
-            if getattr(self,f"{buttonName}_var").get():
-                for skill in skills_to_process:
-                    if skill not in self._spell_skill_config_internal:
-                        self._spell_skill_config_internal.append(skill)
-                logger.info(f"已启用{buttonText}技能. 当前技能: {self._spell_skill_config_internal}")
-            else:
-                self._spell_skill_config_internal = [s for s in self._spell_skill_config_internal if s not in skills_to_process_set]
-                logger.info(f"已禁用{buttonText}技能. 当前技能: {self._spell_skill_config_internal}")
-
-        # 保证唯一性，但保留顺序
-        self._spell_skill_config_internal = list(dict.fromkeys(self._spell_skill_config_internal))
-
-        self.save_config()
-
     def set_controls_state(self, state):
-        self.button_and_entry = [
+        Button_and_Entry = [
             self.adb_path_change_button,
             self.random_chest_check,
             self.who_will_open_combobox,
-            self.system_auto_check,
-            self.aoe_once_check,
-            self.button_save_custom_aoe,
-            self.aoe_custom_time_entry,
-            self.aoe_custom_time_label,
-            self.auto_after_aoe_check,
             self.skip_recover_check,
             self.skip_chest_recover_check,
+            self.recover_when_beginning_check,
             self.active_rest_check,
             self.rest_intervel_entry,
             self.button_save_rest_intervel,
@@ -1040,37 +1399,40 @@ class ConfigPanelApp(tk.Toplevel):
             self.active_beautiful_ore,
             self.active_royalsuite_rest,
             self.active_beg_money,
+            self.task_specific_config_check,
             self.button_save_adb_port,
-            self.active_csc
+            self.button_save_emu_index,
+            self.delete_task_specific_config_button,
+            self.active_csc,
+            self.max_try_limit_entry,
+            self.button_save_max_try_limit
             ]
 
         if state == tk.DISABLED:
             self.farm_target_combo.configure(state="disabled")
-            for widget in self.button_and_entry:
+            if hasattr(self, 'overall_combo'):
+                self.overall_combo.configure(state="disabled")
+            if hasattr(self, 'task_point_comboboxes'):
+                for combo in self.task_point_comboboxes.values():
+                    combo.configure(state="disabled")
+            for widget in Button_and_Entry:
                 widget.configure(state="disabled")
         else:
             self.farm_target_combo.configure(state="readonly")
-            for widget in self.button_and_entry:
+            if hasattr(self, 'overall_combo'):
+                self.overall_combo.configure(state="readonly")
+            if hasattr(self, 'task_point_comboboxes'):
+                for combo in self.task_point_comboboxes.values():
+                    combo.configure(state="readonly")
+            for widget in Button_and_Entry:
                 widget.configure(state="normal")
-            self.update_active_rest_state()
-            self.update_change_aoe_once_check()
-
-        if not self.system_auto_combat_var.get():
-            widgets = [
-                *[getattr(self,buttonName) for buttonName,_,_,_,_ in SPELLSEKILL_TABLE]
-            ]
-            for widget in widgets:
-                if isinstance(widget, ttk.Widget):
-                    widget.state([state.lower()] if state != tk.NORMAL else ['!disabled'])
+            self.updateACTIVE_REST_state()
 
     def toggle_start_stop(self):
         if not self.quest_active:
             self.start_stop_btn.config(text="停止")
             self.set_controls_state(tk.DISABLED)
-            setting = FarmConfig()
-            config = LoadConfigFromFile()
-            for attr_name, var_type, var_config_name, var_default_value in CONFIG_VAR_LIST:
-                setattr(setting, var_config_name, config[var_config_name])
+            setting = LoadSettingFromDict(LoadConfig())
             setting._FINISHINGCALLBACK = self.finishingcallback
             self.msg_queue.put(('start_quest', setting))
             self.quest_active = True
@@ -1078,10 +1440,14 @@ class ConfigPanelApp(tk.Toplevel):
             self.msg_queue.put(('stop_quest', None))
 
     def finishingcallback(self):
-        logger.info("已停止.")
-        self.start_stop_btn.config(text="脚本, 启动!")
+        logger.info(_("已停止."))
+        self.start_stop_btn.config(text=_("脚本, 启动!"))
         self.set_controls_state(tk.NORMAL)
-        self.updata_config()
+        
+        config = LoadConfig()
+        if 'KARMA_ADJUST' in config:
+            self.KARMA_ADJUST.set(config['KARMA_ADJUST'])
+
         self.quest_active = False
 
     def turn_to_7000G(self):
@@ -1089,7 +1455,7 @@ class ConfigPanelApp(tk.Toplevel):
         self.main_frame.grid_remove()
         summary = self.summary_log_display.get("1.0", "end-1c")
         if self.INTRODUCTION in summary:
-            summary = "唔, 看起来一次成功的地下城都没有完成."
-        text = f"你的队伍已经耗尽了所有的再起之火.\n在耗尽再起之火前,\n你的队伍已经完成了如下了不起的壮举:\n\n{summary}\n\n不过没关系, 至少, 你还可以找公主要钱.\n\n赞美公主殿下!\n"
+            summary = _("唔, 看起来一次成功的地下城都没有完成.")
+        text = _("你的队伍已经耗尽了所有的再起之火.\n在耗尽再起之火前,\n你的队伍已经完成了如下了不起的壮举:\n\n%s\n\n不过没关系, 至少, 你还可以找公主要钱.\n\n赞美公主殿下!\n") % summary
         turn_to_7000G_label = ttk.Label(self, text = text)
         turn_to_7000G_label.grid(row=0, column=0,)
