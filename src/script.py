@@ -109,7 +109,6 @@ class RuntimeContext:
     NEED_RECOVER_WHEN_BEGINNING = True
     TASK_STEP_INDEX = 0
 class FarmQuest:
-    _DUNGWAITTIMEOUT = 0
     _TARGETINFOLIST = None
     _EOT = None
     _preEOTcheck = None
@@ -122,12 +121,10 @@ class FarmQuest:
         # 当访问不存在的属性时，抛出AttributeError
         raise AttributeError(_("FarmQuest对象没有属性'%s'") % name)
 class TargetInfo:
-    def __init__(self, target: str, swipeDir: list = None, roi=None, activeSpellSequenceOverride = False):
+    def __init__(self, target: str, swipeDir: list = None, roi=None):
         self.target = target
         self.swipeDir = swipeDir
-        # 注意 roi校验需要target的值. 请严格保证roi在最后.
         self.roi = roi
-        self.activeSpellSequenceOverride = activeSpellSequenceOverride
     @property
     def swipeDir(self):
         return self._swipeDir
@@ -631,10 +628,8 @@ def Factory():
                     logger.info(_("ADB操作失败/数据错误, 尝试重启ADB或模拟器程序..."))
                     ResetDevice()
                 time.sleep(1)
-    def _check(screenImage, shortPathOfTarget, roi = None, outputMatchResult = False):
-        template = LoadTemplateImage(shortPathOfTarget)
+    def _check(screenImage, template, roi = None, outputMatchResult = False):
         screenshot = screenImage.copy()
-        threshold = 0.80
         pos = None
         search_area = CutRoI(screenshot, roi)
         try:
@@ -659,7 +654,7 @@ def Factory():
         pos=[max_loc[0] + template.shape[1]//2, max_loc[1] + template.shape[0]//2]
         return pos,max_val
     def CheckIf(screenImage, shortPathOfTarget, roi = None, outputMatchResult = False):
-        pos, max_val = _check(screenImage, shortPathOfTarget, roi, outputMatchResult)
+        pos, max_val = _check(screenImage, LoadTemplateImage(shortPathOfTarget), roi, outputMatchResult)
 
         if max_val < 0.8:
             logger.debug(_("匹配失败: {a}的匹配程度为{b:.2f}%, 不足阈值.".format(a=shortPathOfTarget, b=max_val*100)))
@@ -668,7 +663,7 @@ def Factory():
             logger.debug(_("匹配成功: {a}的匹配程度为{b:.2f}%, 位于{c}.".format(a=shortPathOfTarget, b=max_val*100,c=pos)))
             return pos
     def CheckHow(screenImage, shortPathOfTarget, roi = None, outputMatchResult = False):
-        pos, max_val = _check(screenImage, shortPathOfTarget, roi, outputMatchResult)
+        pos, max_val = _check(screenImage, LoadTemplateImage(shortPathOfTarget), roi, outputMatchResult)
 
         logger.debug(_("匹配检测: {a}的匹配程度为{b:.2f}%, 位于{c}.".format(a=shortPathOfTarget,b=max_val*100, c=pos)))
         return max_val
@@ -731,14 +726,10 @@ def Factory():
         cropped = screenshot[position[1]-33:position[1]+33, position[0]-33:position[0]+33]
 
         for i in range(4):
-            template = LoadTemplateImage(f"cursor_{i}")
-        
-            result = cv2.matchTemplate(cropped, template, cv2.TM_CCOEFF_NORMED)
-            threshold = 0.80
-            ubderscore, max_val, ubderscore, ubderscore = cv2.minMaxLoc(result)
+            pos, max_val = _check(cropped, LoadTemplateImage(f"cursor_{i}"))
 
-            logger.debug(_("目标格搜素{a}, 匹配程度:{b:.2f}%".format(a=position, b=max_val*100)))
-            if max_val > threshold:
+            logger.debug(_("目标格搜索{a}, 匹配程度:{b:.2f}%".format(a=position, b=max_val*100)))
+            if max_val > 0.8:
                 logger.debug(_("已达到检测阈值."))
                 return None 
         return position
@@ -747,13 +738,11 @@ def Factory():
         screenshot = screenImage
         position = targetInfo.roi
         cropped = screenshot[position[1]-33:position[1]+33, position[0]-33:position[0]+33]
+        threshold = 0.8
         
         if (targetInfo.target not in stair_img):
             # 验证楼层
-            template = LoadTemplateImage(targetInfo.target)
-            result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
-            threshold = 0.80
-            underscore, max_val, underscore, underscore = cv2.minMaxLoc(result)
+            pos, max_val = _check(screenshot, LoadTemplateImage(targetInfo.target))
 
             logger.debug(_("搜索楼层标识{a}, 匹配程度:{b:.2f}%".format(a=targetInfo.target,b=max_val*100)))
             if max_val > threshold:
@@ -762,16 +751,45 @@ def Factory():
             return position
             
         else: #equal: targetInfo.target IN stair_img
-            template = LoadTemplateImage(targetInfo.target)
-            result = cv2.matchTemplate(cropped, template, cv2.TM_CCOEFF_NORMED)
-            threshold = 0.80
-            underscore, max_val, underscore, underscore = cv2.minMaxLoc(result)
+            pos, max_val = _check(cropped, LoadTemplateImage(targetInfo.target))
 
             logger.debug(_("搜索楼梯{a}, 匹配程度:{b:.2f}%".format(a=targetInfo.target, b=max_val*100)))
             if max_val > threshold:
                 logger.info(_("判定为楼梯存在, 尚未通过."))
                 return position
             return None
+    def CheckIf_harkenStair(screenImage,targetInfo: TargetInfo):
+        screenshot = screenImage
+        target = targetInfo.target
+        correctStair = targetInfo.roi
+        threshold = 0.80
+
+        isInCorrectStair = True
+
+        if (correctStair != None) and isinstance(correctStair, str) and correctStair.startswith('stair_'):
+            pos, max_val = _check(screenshot, LoadTemplateImage(correctStair))
+
+            logger.debug(_("带验证的哈肯搜索, 目标楼层标识{a}, 匹配程度:{b:.2f}%".format(a=correctStair,b=max_val*100)))
+            if max_val > threshold:
+                logger.info(_("带验证的哈肯搜索, 楼层正确, 判定为当前处于正确楼层."))
+                isInCorrectStair = True
+            isInCorrectStair = False
+        
+        if not isInCorrectStair:
+            logger.info(_("目前处于错误的楼层中, 可能是由于错误点击导致的, 开始全地图搜索哈肯."))
+            pos = StateMap_FindSwipeClick(TargetInfo('harken', None, None))
+            if pos == None:
+                pos = StateMap_FindSwipeClick(TargetInfo('Bharken', None, None))
+            return pos
+        if isInCorrectStair:
+            pos, max_val = _check(screenshot, LoadTemplateImage(target))
+
+            logger.debug(_("不带验证的哈肯搜索, 目标{a}, 匹配程度:{b:.2f}%".format(a=target,b=max_val*100)))
+            if max_val > threshold:
+                logger.info(_("不带验证的哈肯搜索, 已找到哈肯."))
+                return pos
+            return None
+            
     def CheckIf_fastForwardOff(screenImage):
         position = [240,1490]
         template =  LoadTemplateImage(f"fastforward_off")
@@ -1292,6 +1310,18 @@ def Factory():
                     logger.info(_("不满足回城条件, 跳过回城."))
                     return State.EoT,DungeonState.Quit,screen
 
+            if CheckIf(screen, "worldmapflag"):
+                for underscore in range(3):
+                    Press([100,1500])
+                    Sleep(0.5)
+                Press([250,1500])
+                # 由于定位流程包含了返回键, 有时会退出到大地图, 因此强制执行RTT流程, 不管是否需要住宿.
+                # if setting.ACTIVE_REST and runtimeContext._MEET_CHEST_OR_COMBAT and ((runtimeContext._COUNTERDUNG-1) % (max(setting.REST_INTERVEL,1)) == 0):
+                if quest._RTT:
+                    for info in quest._RTT:
+                        TeleportFromDungeonToCity(*info[2])
+                    return IdentifyState()
+                       
             if pos:=(CheckIf(screen,"openworldmap")):
                 if setting.ACTIVE_REST and runtimeContext._MEET_CHEST_OR_COMBAT and ((runtimeContext._COUNTERDUNG-1) % (max(setting.REST_INTERVEL,1)) == 0):
                     Press(pos)
@@ -1329,12 +1359,6 @@ def Factory():
                 if Press(CheckIf(screen,"RiseAgain")):
                     RiseAgainReset(reason = "combat")
                     return IdentifyState()
-                if CheckIf(screen, "worldmapflag"):
-                    for underscore in range(3):
-                        Press([100,1500])
-                        Sleep(0.5)
-                    Press([250,1500])
-                    # 这里不需要continue或者递归 直接继续进行就行
                 if Press(CheckIf(screen, "sandman_recover")):
                     return IdentifyState()
                 if (CheckIf(screen,"cursedWheel_timeLeap")):
@@ -1353,7 +1377,7 @@ def Factory():
                         Press(CheckIf(screen,"ambush"))
                         num = int(setting.KARMA_ADJUST)
                         num = num + 2
-                        new_str = "{a}".format(num)
+                        new_str = "{a}".format(a=num)
                     else:
                         Press(CheckIf(screen,"ignore"))
                         num = int(setting.KARMA_ADJUST)
@@ -1408,17 +1432,24 @@ def Factory():
             Sleep(1)
             counter += 1
         return None, None, screen
-    def GameFrozenCheck(queue, scn):
+    def GameFrozenCheck(queue, scn,  tick= 10, threshold = 0.15):
+        LENGTH = tick
         if scn is None:
             raise ValueError(_("GameFrozenCheck被传入了一个空值."))
-        logger.info(_("卡死检测截图"))
-        LENGTH = 10
-        if len(queue) > LENGTH:
-            queue = []
+        
+        logger.debug(_("卡死检测截图"))
+
+        if len(queue) >= LENGTH:
+            queue.pop(0)
         queue.append(scn)
-        totalDiff = 0
-        t = time.time()
-        if len(queue)==LENGTH:
+
+        if not hasattr(GameFrozenCheck, "call_counter"):
+            GameFrozenCheck.call_counter = 0
+        GameFrozenCheck.call_counter += 1
+
+        if GameFrozenCheck.call_counter % tick == 0 and len(queue) == LENGTH:
+            totalDiff = 0
+            t = time.time()
             for i in range(1,LENGTH):
                 grayThis = cv2.cvtColor(queue[i], cv2.COLOR_BGR2GRAY)
                 grayLast = cv2.cvtColor(queue[i-1], cv2.COLOR_BGR2GRAY)
@@ -1426,7 +1457,7 @@ def Factory():
                 totalDiff += mean_diff
             logger.info(f"卡死检测耗时: {time.time()-t:.5f}秒")
             logger.info(f"卡死检测结果: {totalDiff:.5f}")
-            if totalDiff<=0.15:
+            if totalDiff<=threshold:
                 return queue, True
         return queue, False
     def StateCombatCheck(screen):
@@ -1503,14 +1534,12 @@ def Factory():
             return
         def ActiveAutoCombat():
             scn = ScreenShot()
-            # v = CheckHow(scn,r"spellskill/CombatAutoDisable",[[841, 1124, 35, 13]])
-            # logger.info(f"disable: {v}")
-            if (CheckIf(scn,"spellskill/CombatAutoDisable",[[841, 1124, 35, 13]])):
+            if (CheckIf(scn,"spellskill/CombatAutoDisable",[[841, 1124-42, 35, 13]])):
                 Press([850,1100])
             Sleep(5)
             return
         def SkillLvlSelectAndDoubleCheck(skillPos,skilllvl, supportTarget):
-            skillPosDict = { "左上技能":[266,1015],"右上技能":[640,1015],"左下技能":[266,1104],"右下技能":[640,1104]}
+            skillPosDict = { "左上技能":[266,965],"右上技能":[640,965],"左下技能":[266,1054],"右下技能":[640,1054]}
             supportTargetDict = {"左上角色": [200,1200], "中上角色": [450,1200], "右上角色": [700,1200], "左下角色":[200,1400], "中下角色":[450,1400], "右下角色":[700,1400]}
             
             # 打开详情界面
@@ -1579,17 +1608,16 @@ def Factory():
                     PressReturn()
                     Sleep(0.2)
 
-                SkillLvlSelectAndDoubleCheck(skillPos,1)
+                SkillLvlSelectAndDoubleCheck(skillPos,1,supportTarget)
                 return
 
         ###################################################################################
         # 主逻辑开始
         # 0. 开启二倍速
         screen = ScreenShot()
-        if not runtimeContext._COMBATSPD:
-            if Press(CheckIf(screen,"combatSpd")) or Press(CheckIf(screen,"combatSpd_DHI")):
-                runtimeContext._COMBATSPD = True
-                Sleep(1)
+        if Press(CheckIf(screen,"combatSpd")) or Press(CheckIf(screen,"combatSpd_DHI")):
+            runtimeContext._COMBATSPD = True
+            Sleep(1)
         # 1. 检查重置标识
         if runtimeContext.COMBAT_RESET:
             CopyStrategy()
@@ -1623,7 +1651,7 @@ def Factory():
             return
 
         # 3. 非全自动模式：点击任意键直到出现“flee”图片
-        [pos_x, pos_y] = FindCoordsOrElseExecuteFallbackAndWait(["flee","chestFlag","dungFlag", "someonedead"],[1,1],1)
+        [pos_x, pos_y] = FindCoordsOrElseExecuteFallbackAndWait(["flee","chestFlag","dungFlag", "someonedead","RiseAgain"],[1,1],1)
         if (pos_x>=735)and(pos_x<=735+126)and(pos_y>=1158)and(pos_y<=1158+68):
             pass
         else:
@@ -1716,6 +1744,8 @@ def Factory():
             if target == "position":
                 logger.info(_("当前目标: 地点{a}".format(a=roi)))
                 targetPos = CheckIf_ReachPosition(scn,targetInfo)
+            elif target in ['harken','Bharken']:
+                targetPos = CheckIf_harkenStair(scn,targetInfo)
             elif target.startswith("stair"):
                 logger.info(_("当前目标: 楼梯{a}".format(a=target)))
                 targetPos = CheckIf_throughStair(scn,targetInfo)
@@ -1725,14 +1755,16 @@ def Factory():
                     logger.info(_("找到了 {a}! {b}".format(a=target, b=targetPos)))
                     if (target == "chest") and (swipeDir!= None):
                         logger.debug(_("宝箱热力图: 地图:{a} 方向:{b} 位置:{c}".format(a=setting.FARM_TARGET, b=swipeDir, c=targetPos)))
-                    if not roi:
-                        # 如果没有指定roi 我们使用二次确认
-                        # logger.debug(f"拖动: {targetPos[0]},{targetPos[1]} -> 450,800")
-                        # DeviceShell(f"input swipe {targetPos[0]} {targetPos[1]} {(targetPos[0]+450)//2} {(targetPos[1]+800)//2}")
-                        # 二次确认也不拖动了 太容易触发bug
-                        Sleep(2)
-                        Press([1,210]) # 点击地图左上角来清除选中状态
-                        targetPos = CheckIf(ScreenShot(),target,roi)
+                    Sleep(1)
+                    # 二次确认也不确认了, 会撞上哈肯然后跳到别的楼层.
+                    # if not roi:
+                    #     # 如果没有指定roi 我们使用二次确认
+                    #     # logger.debug(f"拖动: {targetPos[0]},{targetPos[1]} -> 450,800")
+                    #     # DeviceShell(f"input swipe {targetPos[0]} {targetPos[1]} {(targetPos[0]+450)//2} {(targetPos[1]+800)//2}")
+                    #     # 二次确认也不拖动了 太容易触发bug
+                    #     Sleep(2)
+                    #     Press([1,210]) # 点击地图左上角来清除选中状态
+                    #     targetPos = CheckIf(ScreenShot(),target,roi)
                     break
         return targetPos
     def StateMoving_CheckFrozen():
@@ -1810,25 +1842,25 @@ def Factory():
                     Press([136,1431]) # automove
                     return StateMoving_CheckFrozen(), False
                 else:
-                    if setting._DUNGWAITTIMEOUT == 0:
+                    # if setting._DUNGWAITTIMEOUT == 0:
                         logger.info(_("经过对比中心区域, 判断为抵达目标地点."))
                         logger.info(_("无需等待, 当前目标已完成."))
                         return DungeonState.Map, True
-                    else:
-                        logger.info(_("经过对比中心区域, 判断为抵达目标地点."))
-                        logger.info(_("开始等待...等待..."))
-                        PressReturn()
-                        Sleep(0.5)
-                        PressReturn()
-                        while 1:
-                            if setting._DUNGWAITTIMEOUT-time.time()+waitTimer<0:
-                                logger.info(_("等得够久了. 目标地点完成."))
-                                Sleep(1)
-                                Press([777,150])
-                                return None, True
-                            logger.info(_("还需要等待{a}秒.".foramt(a=setting._DUNGWAITTIMEOUT-time.time()+waitTimer)))
-                            if StateCombatCheck(ScreenShot()):
-                                return DungeonState.Combat, False
+                    # else:
+                    #     logger.info(_("经过对比中心区域, 判断为抵达目标地点."))
+                    #     logger.info(_("开始等待...等待..."))
+                    #     PressReturn()
+                    #     Sleep(0.5)
+                    #     PressReturn()
+                    #     while 1:
+                    #         if setting._DUNGWAITTIMEOUT-time.time()+waitTimer<0:
+                    #             logger.info(_("等得够久了. 目标地点完成."))
+                    #             Sleep(1)
+                    #             Press([777,150])
+                    #             return None, True
+                    #         logger.info(_("还需要等待{a}秒.".foramt(a=setting._DUNGWAITTIMEOUT-time.time()+waitTimer)))
+                    #         if StateCombatCheck(ScreenShot()):
+                    #             return DungeonState.Combat, False
         return DungeonState.Map, False
     def StateChest():
         nonlocal runtimeContext
@@ -1859,7 +1891,7 @@ def Factory():
 
         while 1:
             FindCoordsOrElseExecuteFallbackAndWait(
-                ["dungFlag","combatActive","chestOpening","whowillopenit","RiseAgain"],
+                ["dungFlag","combatActive","chestOpening","whowillopenit","RiseAgain", "ambush"],
                 [[1,1],[1,1],"chestFlag"],
                 1)
             scn = ScreenShot()
@@ -1904,6 +1936,9 @@ def Factory():
                 return None
             if CheckIf(scn,"dungFlag"):
                 return DungeonState.Dungeon
+            if CheckIf(scn, "ambush"):
+                logger.info("开箱子然后遇到怪物还是善恶, 你这什么运气啊.")
+                return None
             if StateCombatCheck(scn):
                 return DungeonState.Combat
             
@@ -2017,7 +2052,7 @@ def Factory():
                                 Press([36+(counter_trychar%3)*286,1425])
                                 Sleep(2)
                                 continue
-                            elif CheckIf(scn,"trait"):
+                            elif CheckIf(scn:=ScreenShot(),"trait"):
                                 if CheckIf(scn,"story", [[676,800,220,108]]):
                                     Press([725,850])
                                 else:
@@ -2537,7 +2572,7 @@ def Factory():
 
                     RestartableSequenceExecution(
                         lambda: logger.info(_("第一步: 重置因果")),
-                        lambda: CursedWheelTimeLeap(None,"LBC/symbolofalliance",[["LBC/EnaWasSaved",2,1,0]])
+                        lambda: CursedWheelTimeLeap("GhostsOfYore","LBC/symbolofalliance",[["LBC/EnaWasSaved",2,1,0]])
                         )
                     Sleep(10)
                     RestartableSequenceExecution(
@@ -2666,7 +2701,7 @@ def Factory():
                     runtimeContext._COUNTERDUNG+=1
                     RestartableSequenceExecution(
                         lambda: logger.info(_("第一步: 重置因果")),
-                        lambda: CursedWheelTimeLeap(None,"COS/ArnasPast")
+                        lambda: CursedWheelTimeLeap("GhostsOfYore","COS/ArnasPast")
                         )
                     Sleep(10)
                     RestartableSequenceExecution(
@@ -2917,7 +2952,7 @@ def Factory():
 
                     logger.info(_("第5.5步: 击杀风暴六手"))
                     RestartableSequenceExecution(
-                        lambda:FindCoordsOrElseExecuteFallbackAndWait("dungFlag",["EdgeOfTown","beginningAbyss","B5FWarpedOne\"sNest","GotoDung",[1,1]],1),
+                        lambda:FindCoordsOrElseExecuteFallbackAndWait("dungFlag",["EdgeOfTown","beginningAbyss","B5FWarpedOnesNest","GotoDung",[1,1]],1),
                     )
                     RestartableSequenceExecution(
                         lambda:StateDungeon([TargetInfo("position","左上",[454,662]),
@@ -2985,7 +3020,7 @@ def Factory():
                             )
                     costtime = time.time()-starttime
                     total_time = total_time + costtime
-                    logger.info(_("第{a}次\"钢试炼\"完成. \n该次花费时间{b:.2f}s.\n总计用时{c:.2f}s.\n平均用时{d:.2f}".format(a=runtimeContext._COUNTERDUNG,b=costtime, c=total_time), d=total_time/runtimeContext._COUNTERDUNG),
+                    logger.info(_("第{a}次\"钢试炼\"完成. \n该次花费时间{b:.2f}s.\n总计用时{c:.2f}s.\n平均用时{d:.2f}".format(a=runtimeContext._COUNTERDUNG,b=costtime, c=total_time, d=total_time/runtimeContext._COUNTERDUNG)),
                             extra={"summary": True})
 
             case "jier":
@@ -3026,7 +3061,8 @@ def Factory():
                         lambda:FindCoordsOrElseExecuteFallbackAndWait("dungFlag",["EdgeOfTown","beginningAbyss","B4FLabyrinth","GotoDung",[1,1]],1)
                         )
                     RestartableSequenceExecution( 
-                        lambda:StateDungeon([TargetInfo("position","左下",[452,1026]),
+                        lambda:StateDungeon([TargetInfo("position","左下",[452,545]),
+                                             TargetInfo("position","左下",[452,1026]),
                                              TargetInfo("harken","左上",None)]),
                         )
                     
@@ -3059,76 +3095,96 @@ def Factory():
                             lambda:StateInn()
                             )
                     logger.info(_("完成了{a}次旅店休息.\n总计用时{c:.2f}s.\n平均用时{d:.2f}s.").format(a=counter+1, c=time.time()-t, d=(time.time()-t)/(counter+1)),extra={"summary": True})
-            case "test":
-                def AutoThisChar():
-                    Press([850,1100])
-                    Sleep(0.5)
-                    Press([850,1100])
-                def SkillLvlSelectAndDoubleCheck(skillPos,skilllvl):
-                    skillPosDict = { "左上技能":[266,1015],"右上技能":[640,1015],"左下技能":[266,1104],"右下技能":[640,1104]}
-                    
-                    # 打开详情界面
-                    into_detail = False
-                    for underscore in range(3):
-                        Press(skillPosDict[skillPos])
+            case "retard_tapjoy":
+                def split_image(img):
+                    img_analyze = {}
+                    for i in range(5):
+                        for j in range(7):
+                            cropped = img[(274+114*j):(368+114*j),(174+114*i):(268+114*i)]
+                            img_analyze[i*10+j] = cropped
+                    return img_analyze
+                def smallgame_check(a,b):
+                    result = cv2.matchTemplate(a, b, cv2.TM_CCOEFF_NORMED)
+                    underscore, max_val, underscore, max_loc = cv2.minMaxLoc(result)
+                    return max_val
+                def shoot(i):
+                    Press([221+114*i,321])
+                ############
+                screen_queue = []
+                empty_img = LoadTemplateImage('smallgame/smallgame_empty')
+                merge_counter = 0
+                start_time = time.time()
+                while 1:
+                    Sleep(1)
+                    img = ScreenShot()
+                    if Press(CheckIf(img,"smallgame/nothanks")):
                         Sleep(1)
-                        if CheckIf(ScreenShot(),"spellskill/skillDetail"):
-                            into_detail = True
-                            break
-                    if not into_detail:
-                        logger.info(("没有检测到任务详情界面. 疑似法力不足, 使用自动战斗."))
-                        for underscore in range(3):
-                            PressReturn()
-                            Sleep(0.2)
+                        continue
+                    if Press(CheckIf(img,"smallgame/nothanks_y")):
+                        Sleep(1)
+                        continue
+                    if Press(CheckIf(img,"smallgame/nothanks_s")):
+                        Sleep(1)
+                        continue
+                    if Press(CheckIf(img,"smallgame/yes")):
+                        Sleep(1)
+                        continue
+                    if Press(CheckIf(img,"smallgame/play")):
+                        Sleep(1)
+                        continue
+                    screen_queue, if_frozen = GameFrozenCheck(screen_queue,img[274:(274+114*7),174:(174+114*5)],3,0.002)
+                    if if_frozen:
+                        if smallgame_check(img[1150-50:1150+50,800-50:800+50],empty_img[1150-50:1150+50,800-50:800+50]) > 0.9:
+                            Press([800,1150])
+                            Sleep(2)
+                            Press([315,1037])
+                            Sleep(0.5)
+                            shoot(0)
+                            continue
+                    img_analyze = split_image(img)
 
-                        AutoThisChar()
-                        return
+                    empty_img = LoadTemplateImage('smallgame/smallgame_empty')
+                    img_analyze_empty = split_image(empty_img)
 
-                    # 设置等级
-                    Sleep(1)
-                    scn = ScreenShot()
-                    has_lv_1 = (CheckIf(scn,f"spellskill\skillLvl\lv1")) or (CheckIf(scn,f"spellskill\skillLvl\s_lv1"))
-                    if (not has_lv_1):
-                        if (skilllvl>=2):
-                            logger.error("错误: 设定了高于1级的技能, 但并未检测到技能等级.\n 使用默认技能.")
-                    else:
-                        if skilllvl!=1:
-                            has_lv_x = (CheckIf(scn,f"spellskill\skillLvl\lv{skilllvl}")) or (CheckIf(scn,f"spellskill\skillLvl\s_lv{skilllvl}"))
-                        else:
-                            has_lv_x = has_lv_1
-
-                        if not has_lv_x:
-                            skilllvl = 1
-                            logger.error("错误: 未检测到目标等级\n 使用1级技能.")
-                        if not Press(CheckIf(scn,f"spellskill\skillLvl\lv{skilllvl}")):
-                            if not Press(CheckIf(scn,f"spellskill\skillLvl\s_lv{skilllvl}")):
-                                logger.error("错误: 我认为不可能发生这种情况. 请务必告诉我.")
-
-                    # 确认
-                    scn = ScreenShot()
-                    if Press(CheckIf(scn,"OK")):
-                        Sleep(2)
-                    elif pos:=(CheckIf(scn,"next")):
-                        Press([pos[0]-15+random.randint(0,30),pos[1]+150+random.randint(0,30)])
-                    else:
-                        for i in range(6):
-                            Press([150*i-150,750])
-                            Sleep(0.1)
-                        Sleep(2)
-
-                    # 资源不足
-                    Sleep(1)
-                    scn = ScreenShot()
-                    if CheckIf(scn,"notenoughsp") or CheckIf(scn,"notenoughmp"):
-                        for underscore in range(3):
-                            PressReturn()
-                            Sleep(0.2)
-
-                        SkillLvlSelectAndDoubleCheck(skillPos,1)
-                        return
-
+                    depth = [7,7,7,7,7]
+                    for k in img_analyze.keys():
+                        r = smallgame_check(img_analyze[k],img_analyze_empty[k])
+                        if r>0.98:
+                            if k%10 < depth[k//10]:
+                                depth[k//10] = k % 10
                     
-                SkillLvlSelectAndDoubleCheck("左上技能", 4)
+                    # logger.info(depth)
+
+                    next = img[1178-40:1178+40,450-40:450+40,]
+
+                    send = False
+                    for i in range(5):
+                        if depth[i]!=0:
+                            k = i*10+depth[i]-1
+                            if k in img_analyze:
+                                r = smallgame_check(img_analyze[k],next)
+                                if r >0.95:
+                                    send = True
+                                    break
+                    if send:
+                        logger.info(f"合成{i}")
+                        shoot(i)
+                        merge_counter+=1
+                        cost_time = time.time()-start_time
+                        if merge_counter %20 ==0:
+                            logger.info(f"完成最多{merge_counter}次合并, 用时{cost_time:.2f}s. 平均{cost_time/merge_counter:.2f}秒一次合并.", extra={"summary": True})
+                        continue
+                    for i in range(5):
+                        if depth[i]==0:
+                            logger.info(f"空白{i}")
+                            shoot(i)
+                            continue
+                    
+                    mindeep = depth.index(min(depth))
+                    logger.info(f"摆烂{mindeep}")
+                    shoot(mindeep)
+                    continue
+        ##########################
         setting._FINISHINGCALLBACK()
         return
     def Farm(set:FarmConfig):

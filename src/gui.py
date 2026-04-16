@@ -455,7 +455,7 @@ class ConfigPanelApp(tk.Toplevel):
         super().__init__(master_controller)
         self.controller = master_controller
         self.msg_queue = msg_queue
-        self.geometry('630x750')
+        self.geometry('630x700')
         
         self.title(self.TITLE)
 
@@ -586,7 +586,7 @@ class ConfigPanelApp(tk.Toplevel):
         self.main_frame.rowconfigure(0, weight=1) 
         self.main_frame.columnconfigure(0, weight=1)
 
-        self.scroll_view = ScrollableFrame(self.main_frame, height=620)
+        self.scroll_view = ScrollableFrame(self.main_frame, height=570)
         self.scroll_view.grid(row=0, column=0, sticky="nsew")
         content_root = self.scroll_view.scrollable_frame
 
@@ -952,9 +952,10 @@ class ConfigPanelApp(tk.Toplevel):
             try:
                 self.current_task_points = LoadQuest(task_name)._TARGETINFOLIST
                 self.is_current_task_dungeon = (LoadQuest(task_name)._TYPE == 'dungeon')
-            except NameError:
+            except Exception:
                 logger.error(_('不可用的任务名.'))
                 self.current_task_points = []
+                self.is_current_task_dungeon = False
 
             # 获取所有策略面板名称
             strategy_names = list(self.strategy_panels.values())
