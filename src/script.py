@@ -47,6 +47,8 @@ CONFIG_VAR_LIST = [
                                                                     },]],
             ["GENERAL",   "DEFAULT_OVERALL_STRATEGY", tk.StringVar, _("全自动战斗")],        
             ["GENERAL",   "LANGUAGE",                 tk.StringVar, "zh_CN"],
+            ["GENERAL",   "WEBSITE_ORG_TIME",         tk.StringVar, None],
+            ["GENERAL",   "AM_REFRESH_TIME",          tk.StringVar, None],
 
             ["TEMPLATE",   "TASK_POINT_STRATEGY",     dict,          {}],
             ["TEMPLATE",   "QUICK_DISARM_CHEST",      tk.BooleanVar, False],
@@ -102,6 +104,7 @@ class RuntimeContext:
     _CRASHCOUNTER = 0
     _IMPORTANTINFO = ""
     _RESUMEAVAILABLE = False
+    _STEPAFTERRESTART = True
     STRATEGY_RESET_EACH_RESTART = {}
     STRATEGY_RESET_EACH_DUNGEON = {}
     COMBAT_RESET = True
@@ -217,8 +220,19 @@ def CheckAndRecoverDevice(setting : FarmConfig, runtimeContext: RuntimeContext, 
             text=True
         )
         result_str = result.stdout.strip()
+        logger.debug(result_str)
         split_results_list = result_str.split("\n")
-        check_results_list = [int(task.split("\",\"")[1]) for task in split_results_list if task]
+        check_results_list = []
+        for task in split_results_list:
+            if not task:
+                continue
+            parts = task.split("\",\"")
+            if len(parts) >= 2:
+                try:
+                    pid = int(parts[1])
+                    check_results_list.append(pid)
+                except ValueError:
+                    pass
         return check_results_list
     def KillAdb():
         adb_path = GetADBPathFromEmuPath(setting.EMU_PATH)
@@ -452,46 +466,45 @@ def CheckAndRecoverDevice(setting : FarmConfig, runtimeContext: RuntimeContext, 
     
     return None
 ##################################################################
-def CutRoI(screenshot,roi):
-    if roi is None:
+def CutRoI(screenshot, roi):
+    """
+    screenshot: 输入图像
+    roi: 列表，第一个元素是 (x, y, w, h) 作为main_rect，后续元素是需要涂黑的矩形
+    返回: 只包含 main_rect 区域的图像，其中与其他 RoI 重叠的部分已被涂黑
+    """
+    if roi is None or len(roi) == 0:
         return screenshot
 
-    img_height, img_width = screenshot.shape[:2]
-    roi_copy = roi.copy()
-    roi1_rect = roi_copy.pop(0)  # 第一个矩形 (x, y, width, height)
+    # 第一个是 main_rect，其余是需要涂黑的区域
+    main_rect = roi[0]
+    other_rects = roi[1:] if len(roi) > 1 else []
 
-    x1, y1, w1, h1 = roi1_rect
+    img_h, img_w = screenshot.shape[:2]
 
-    roi1_y_start_clipped = max(0, y1)
-    roi1_y_end_clipped = min(img_height, y1 + h1)
-    roi1_x_start_clipped = max(0, x1)
-    roi1_x_end_clipped = min(img_width, x1 + w1)
+    # 在原图上直接涂黑其他 RoI（注意边界裁剪）
+    for rect in other_rects:
+        x, y, w, h = rect
+        x_start = max(0, x)
+        y_start = max(0, y)
+        x_end = min(img_w, x + w)
+        y_end = min(img_h, y + h)
 
-    pixels_not_in_roi1_mask = np.ones((img_height, img_width), dtype=bool)
-    if roi1_x_start_clipped < roi1_x_end_clipped and roi1_y_start_clipped < roi1_y_end_clipped:
-        pixels_not_in_roi1_mask[roi1_y_start_clipped:roi1_y_end_clipped, roi1_x_start_clipped:roi1_x_end_clipped] = False
+        if x_start < x_end and y_start < y_end:
+            screenshot[y_start:y_end, x_start:x_end] = 0
 
-    screenshot[pixels_not_in_roi1_mask] = 255
+    # 裁剪出 roi1 区域
+    x1, y1, w1, h1 = main_rect
+    x1_start = max(0, x1)
+    y1_start = max(0, y1)
+    x1_end = min(img_w, x1 + w1)
+    y1_end = min(img_h, y1 + h1)
 
-    if (roi is not []):
-        for roi2_rect in roi_copy:
-            x2, y2, w2, h2 = roi2_rect
+    if x1_start >= x1_end or y1_start >= y1_end:
+        logger.error("错误:roi1范围无效.")
+        return screenshot  # 无效 roi1，返回原图
 
-            roi2_y_start_clipped = max(0, y2)
-            roi2_y_end_clipped = min(img_height, y2 + h2)
-            roi2_x_start_clipped = max(0, x2)
-            roi2_x_end_clipped = min(img_width, x2 + w2)
-
-            if roi2_x_start_clipped < roi2_x_end_clipped and roi2_y_start_clipped < roi2_y_end_clipped:
-                pixels_in_roi2_mask_for_current_op = np.zeros((img_height, img_width), dtype=bool)
-                pixels_in_roi2_mask_for_current_op[roi2_y_start_clipped:roi2_y_end_clipped, roi2_x_start_clipped:roi2_x_end_clipped] = True
-
-                # 将位于 roi2 中的像素设置为0
-                # (如果这些像素之前因为不在roi1中已经被设为0，则此操作无额外效果)
-                screenshot[pixels_in_roi2_mask_for_current_op] = 0
-
-    # cv2.imwrite(f"CutRoI_{time.time()}.png", screenshot)
-    return screenshot
+    main_img = screenshot[y1_start:y1_end, x1_start:x1_end].copy()
+    return main_img
 ##################################################################
 def Factory():
     toaster = ToastNotifier()
@@ -647,11 +660,16 @@ def Factory():
         underscore, max_val, underscore, max_loc = cv2.minMaxLoc(result)
 
         if outputMatchResult:
-            cv2.imwrite("origin.png", screenshot)
-            cv2.rectangle(screenshot, max_loc, (max_loc[0] + template.shape[1], max_loc[1] + template.shape[0]), (0, 255, 0), 2)
-            cv2.imwrite("matched.png", screenshot)
+            cv2.imwrite("origin.png", search_area)
+            cv2.rectangle(search_area, max_loc, (max_loc[0] + template.shape[1], max_loc[1] + template.shape[0]), (0, 255, 0), 2)
+            cv2.imwrite("matched.png", search_area)
 
-        pos=[max_loc[0] + template.shape[1]//2, max_loc[1] + template.shape[0]//2]
+        if roi is None or len(roi) == 0:
+            pos=[max_loc[0] + template.shape[1]//2,
+                 max_loc[1] + template.shape[0]//2]
+        else:
+            pos=[roi[0][0] + max_loc[0] + template.shape[1]//2,
+                 roi[0][1] + max_loc[1] + template.shape[0]//2]
         return pos,max_val
     def CheckIf(screenImage, shortPathOfTarget, roi = None, outputMatchResult = False):
         pos, max_val = _check(screenImage, LoadTemplateImage(shortPathOfTarget), roi, outputMatchResult)
@@ -769,11 +787,12 @@ def Factory():
         if (correctStair != None) and isinstance(correctStair, str) and correctStair.startswith('stair_'):
             pos, max_val = _check(screenshot, LoadTemplateImage(correctStair))
 
-            logger.debug(_("带验证的哈肯搜索, 目标楼层标识{a}, 匹配程度:{b:.2f}%".format(a=correctStair,b=max_val*100)))
+            logger.debug(_("楼层验证中, 目标楼层标识{a}, 匹配程度:{b:.2f}%".format(a=correctStair,b=max_val*100)))
             if max_val > threshold:
-                logger.info(_("带验证的哈肯搜索, 楼层正确, 判定为当前处于正确楼层."))
+                logger.info(_("楼层验证判定通过, 当前处于正确楼层."))
                 isInCorrectStair = True
-            isInCorrectStair = False
+            else:
+                isInCorrectStair = False
         
         if not isInCorrectStair:
             logger.info(_("目前处于错误的楼层中, 可能是由于错误点击导致的, 开始全地图搜索哈肯."))
@@ -784,9 +803,9 @@ def Factory():
         if isInCorrectStair:
             pos, max_val = _check(screenshot, LoadTemplateImage(target))
 
-            logger.debug(_("不带验证的哈肯搜索, 目标{a}, 匹配程度:{b:.2f}%".format(a=target,b=max_val*100)))
+            logger.debug(_("哈肯搜索, 目标{a}, 匹配程度:{b:.2f}%".format(a=target,b=max_val*100)))
             if max_val > threshold:
-                logger.info(_("不带验证的哈肯搜索, 已找到哈肯."))
+                logger.info(_("哈肯搜索, 已找到哈肯."))
                 return pos
             return None
             
@@ -814,6 +833,9 @@ def Factory():
         DeviceShell("input keyevent KEYCODE_BACK")
     def WrapImage(image,r,g,b):
         scn_b = image * np.array([b, g, r])
+        return np.clip(scn_b, 0, 255).astype(np.uint8)
+    def MinusImage(image,r,g,b):
+        scn_b = image - np.array([b, g, r])
         return np.clip(scn_b, 0, 255).astype(np.uint8)
     def TryPressRetry(scn):
         if Press(CheckIf(scn,"startdownload")):
@@ -905,6 +927,7 @@ def Factory():
         runtimeContext._TIME_CHEST = 0
         runtimeContext._TIME_COMBAT = 0 # 因为重启了, 所以清空战斗和宝箱计时器.
         runtimeContext._ZOOMWORLDMAP = False
+        runtimeContext._STEPAFTERRESTART = False
         runtimeContext.STRATEGY_RESET_EACH_RESTART = copy.deepcopy(setting.STRATEGY)
 
         # 保存重启前截图作为备份
@@ -1436,10 +1459,8 @@ def Factory():
         LENGTH = tick
         if scn is None:
             raise ValueError(_("GameFrozenCheck被传入了一个空值."))
-        
-        logger.debug(_("卡死检测截图"))
 
-        if len(queue) >= LENGTH:
+        while len(queue) >= LENGTH:
             queue.pop(0)
         queue.append(scn)
 
@@ -1447,7 +1468,9 @@ def Factory():
             GameFrozenCheck.call_counter = 0
         GameFrozenCheck.call_counter += 1
 
-        if GameFrozenCheck.call_counter % tick == 0 and len(queue) == LENGTH:
+        logger.debug(_("卡死检测截图 counter={a} length={b}".format(a=GameFrozenCheck.call_counter, b=len(queue))))
+
+        if (GameFrozenCheck.call_counter % tick == 0) and (len(queue)==LENGTH):
             totalDiff = 0
             t = time.time()
             for i in range(1,LENGTH):
@@ -1534,7 +1557,7 @@ def Factory():
             return
         def ActiveAutoCombat():
             scn = ScreenShot()
-            if (CheckIf(scn,"spellskill/CombatAutoDisable",[[841, 1124-42, 35, 13]])):
+            if CheckIf(scn,"spellskill/CombatAutoDisable",[[842, 1124-42, 35, 13]]):
                 Press([850,1100])
             Sleep(5)
             return
@@ -1756,16 +1779,9 @@ def Factory():
                     if (target == "chest") and (swipeDir!= None):
                         logger.debug(_("宝箱热力图: 地图:{a} 方向:{b} 位置:{c}".format(a=setting.FARM_TARGET, b=swipeDir, c=targetPos)))
                     Sleep(1)
-                    # 二次确认也不确认了, 会撞上哈肯然后跳到别的楼层.
-                    # if not roi:
-                    #     # 如果没有指定roi 我们使用二次确认
-                    #     # logger.debug(f"拖动: {targetPos[0]},{targetPos[1]} -> 450,800")
-                    #     # DeviceShell(f"input swipe {targetPos[0]} {targetPos[1]} {(targetPos[0]+450)//2} {(targetPos[1]+800)//2}")
-                    #     # 二次确认也不拖动了 太容易触发bug
-                    #     Sleep(2)
-                    #     Press([1,210]) # 点击地图左上角来清除选中状态
-                    #     targetPos = CheckIf(ScreenShot(),target,roi)
                     break
+            if targetPos!=None:
+                return targetPos
         return targetPos
     def StateMoving_CheckFrozen():
         runtimeContext._RESUMEAVAILABLE = True
@@ -1784,8 +1800,8 @@ def Factory():
                 logger.info(_("已退出移动状态. 当前状态: {a}.".format(a=dungState)))
                 break
             if lastscreen is not None:
-                gray1 = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-                gray2 = cv2.cvtColor(lastscreen, cv2.COLOR_BGR2GRAY)
+                gray1 = cv2.cvtColor(CutRoI(screen,[[650,25,225,225]]), cv2.COLOR_BGR2GRAY)
+                gray2 = cv2.cvtColor(CutRoI(lastscreen,[[650,25,225,225]]), cv2.COLOR_BGR2GRAY)
                 mean_diff = cv2.absdiff(gray1, gray2).mean()/255
                 logger.debug(f"移动停止检查:{mean_diff:.2f}")
                 if mean_diff < 0.1:
@@ -1795,7 +1811,7 @@ def Factory():
             lastscreen = screen
         return dungState
     def StateSearch(waitTimer, targetInfo):
-        normalPlace = ["harken","chest","leaveDung","position"]
+        normalPlace = ["harken","chest","leaveDung","position","Bharken"]
         target = targetInfo.target
         # 地图已经打开.
         map = ScreenShot()
@@ -2043,7 +2059,9 @@ def Factory():
                         shouldRecover = True
                         runtimeContext._RECOVERAFTERREZ = False
                     if shouldRecover:
-                        Press([1,1])
+                        for undrscore in range(3):
+                            Press([1,1])
+                            Sleep(0.1)
                         counter_trychar = -1
                         while 1:
                             counter_trychar += 1
@@ -2073,6 +2091,16 @@ def Factory():
                             else:
                                 logger.info(_("自动回复异常, 中止本次回复."))
                                 break
+                    ########### 防止卡空气墙
+                    if not runtimeContext._STEPAFTERRESTART:
+                        logger.info("防止卡空气墙, 右转后左右走.")
+                        DeviceShell(f"input swipe 300 950 600 950")
+                        Sleep(1)
+                        Press([27,950])
+                        Sleep(1)
+                        Press([853,950])
+
+                        runtimeContext._STEPAFTERRESTART = True
                     ########### 尝试resume
                     not_moving = False
                     if runtimeContext._RESUMEAVAILABLE and Press(CheckIf(ScreenShot(),"resume")):
@@ -2109,18 +2137,20 @@ def Factory():
                     ########### 不打开地图, 执行自动任务
                     def startAuto():
                         for tar in ["chest_auto","mark_auto"]:
-                            if targetInfoList[0] and (targetInfoList[0].target == tar):
-                                
+                            if targetInfoList[0] and (targetInfoList[0].target == tar):                        
                                 lastscreen = ScreenShot()
-                                if not Press(CheckIf(lastscreen,tar,[[710,250,180,180]])):
+                                if not Press(CheckIf(lastscreen,tar,[[720,250,150,180]])):
                                     Press(CheckIf(lastscreen,"mapflag"))
-                                    Press([664,329])
+                                    Press([762,346]) # 认为是没有展开菜单
                                     Sleep(1)
                                     lastscreen = ScreenShot()
-                                    if not Press(CheckIf(lastscreen,tar,[[710,250,180,180]])):
+                                    if not Press(CheckIf(lastscreen,tar,[[720,250,150,180]])):
                                         return None # 如果我们两次检测失败, 认为发生了异常
                                 
                                 if tar == "chest_auto":
+                                    if not CheckIf(MinusImage(lastscreen,90,90,90),"chest_auto_minus",[[811,340, 41, 30]]): # 精确匹配按钮是否可用
+                                        logger.info('宝箱按钮不可用.')
+                                        return DungeonState.Dungeon
                                     lastscreen = ScreenShot()
                                     if CheckIf(lastscreen,"NoChestCanBeFound") or CheckIf(lastscreen,"theRouteToTheDestinationCannotBeFound"):
                                         TargetPointComplete()
@@ -2797,7 +2827,7 @@ def Factory():
                     
                     logger.info(_("跳过了巨人检测环节. 现在默认总是击杀灯怪."))
                     RestartableSequenceExecution(
-                        lambda: StateDungeon([TargetInfo("position","左上",[560,928+54],True),
+                        lambda: StateDungeon([TargetInfo("position","左上",[560,928+54]),
                                               TargetInfo("harken2","左上")]),
                         lambda: FindCoordsOrElseExecuteFallbackAndWait("Inn",["returntotown","returnText","leaveDung","blessing",[1,1]],2)
                     )

@@ -41,6 +41,43 @@
         ]
     },
 
+    "fortress-B8F_entrance":{
+        "_TYPE":"dungeon",
+        "questName":"[妖精]要塞八层门口",
+        "_TARGETINFOLIST":[
+            ["stair_fortress1f","左上",[720,395]],
+            ["position","左下",[453,865]],
+            ["chest","左下",[[1,783,900,376],[1,839,423,362]]],
+            ["position","右下",[500,918]],
+            ["chest","右下",[[1,783,900,500]]],
+            ["stair_fortressGate","左下", [720,1027]],
+            ["position","左下",[720,1241]]
+        ],
+        "_EOT":[
+            ["press","impregnableFortress",["EdgeOfTown",[1,1]],1],
+            ["press","fortressEntrance","input swipe 650 250 650 900",1]
+        ]
+    },
+
+    "fortress-B8F_trap":{
+        "_TYPE":"dungeon",
+        "questName":"[妖精]要塞八层陷阱",
+        "_TARGETINFOLIST":[
+            ["stair_fortress1f","左上",[720,395]],
+            ["position","右下",[712,972]],
+            ["position","右下",[500,1080]],
+            ["position","右下",[765,918]],
+            ["position","右下",[606,1026]],
+            ["stair_fortressGate","左下", [720,1027]],
+            ["position","左下",[720,1241]]
+        ],
+        "_EOT":[
+            ["press","impregnableFortress",["EdgeOfTown",[1,1]],1],
+            ["press","fortressEntrance","input swipe 650 250 650 900",1]
+        ]
+    },
+
+
     "DH-4f":{
         "_TYPE":"dungeon",
         "questName":"[刷怪]深雪R4",
@@ -48,7 +85,7 @@
             ["position","右上",[500,610]],
             ["position","右上",[445,290]],
             ["position","右上",[820,605]],
-            ["harken", "右上",null]
+            ["harken", "右上","stair_DH_R4"]
         ],
         "_EOT":[
             ["press","DH",["EdgeOfTown",[1,1]],1],
@@ -92,31 +129,16 @@
         ]
     },
 
-    "DH-Church":{
+    "DH-7f-auto":{
         "_TYPE":"dungeon",
-        "questName":"[刷怪]深雪教会区",
-        "_TARGETINFOLIST":[
-            ["position","左下",[240,810]],
-            ["position","左下",[130,400]],
-            ["position","右上",[500,930]],
-            ["Bharken", "右上",null]
-        ],
-        "_EOT":[
-            ["press","DH",["EdgeOfTown",[1,1]],1],
-            ["press","stair_DH_Church","input swipe 650 900 650 250",1]
-        ]
-    },
-
-    "DH-Church-auto":{
-        "_TYPE":"dungeon",
-        "questName":"[宝箱]教会-全范围找箱",
+        "questName":"[宝箱+刷怪]深雪R7自动箱",
         "_TARGETINFOLIST":[
             ["chest_auto"],
-            ["Bharken", "右下",null]
+            ["harken", "右上",null]
         ],
         "_EOT":[
             ["press","DH",["EdgeOfTown",[1,1]],1],
-            ["press","stair_DH_Church","input swipe 650 900 650 250",1]
+            ["press","DH-R7","input swipe 650 900 650 250",1]
         ]
     },
 
@@ -157,6 +179,48 @@
         "_EOT":[
             ["press","DH",["EdgeOfTown",[1,1]],1],
             ["press","DH-R9","input swipe 650 900 650 250",1]
+        ]
+    },
+
+    "DH-Church-upper":{
+        "_TYPE":"dungeon",
+        "questName":"[宝箱]教会-自动宝箱上半",
+        "_TARGETINFOLIST":[
+            ["chest","左上",null],
+            ["chest","右上",null],
+            ["Bharken", "右上","stair_DH_Church"]
+        ],
+        "_EOT":[
+            ["press","DH",["EdgeOfTown",[1,1]],1],
+            ["press","DH-Church","input swipe 650 900 650 250",1]
+        ]
+    },
+    
+    "DH-Church-auto":{
+        "_TYPE":"dungeon",
+        "questName":"[宝箱]教会-全范围找箱",
+        "_TARGETINFOLIST":[
+            ["chest_auto"],
+            ["Bharken", "右上","stair_DH_Church"]
+        ],
+        "_EOT":[
+            ["press","DH",["EdgeOfTown",[1,1]],1],
+            ["press","DH-Church","input swipe 650 900 650 250",1]
+        ]
+    },
+
+    "HSR-1F":{
+        "_TYPE":"dungeon",
+        "questName":"[宝箱]药师洞1f宝箱(雪地出发)",
+        "_TARGETINFOLIST":[
+            ["chest_auto"],
+            ["position","左下",[720,1135]]
+        ],
+        "_preEOTcheck":"HSR/HSR",
+        "_EOT":
+        [
+            ["press","intoWorldMap",["HSR/HSR","input swipe 400 400 500 500"],1],
+            ["press","HSR/AGMM1F",[1,1],1]
         ]
     },
 
@@ -431,6 +495,39 @@
             ["position", "左上", [185,1085]],
             ["chest","左上",[[0,690,481,485]]],
             ["DOS_quit"]
+        ]
+    },
+    
+    "LMG-GT":{
+        "_TYPE":"dungeon",
+        "questName":"[骨头]炉壶灵庙(王都出发)",
+        "_TARGETINFOLIST":[
+            ["position","右下",[393,545]],
+            ["position","右下",[657,755]],
+            ["position","右下",[555,1235]],
+            ["position","右下",[178,1240]]
+        ],
+        "_preEOTcheck":"LMG/LMG",
+        "_EOT":
+        [
+            ["press","intoWorldMap",["LMG/LMG","input swipe 690 590 690 690"],1],
+            ["press","LMG/LMG1F",[1,1],1]
+        ]
+    },
+    "LMG-FT":{
+        "_TYPE":"dungeon",
+        "questName":"[骨头]炉壶灵庙(战士骨)",
+        "_TARGETINFOLIST":[
+            ["position","右下",[393,545]],
+            ["position","右下",[657,755]],
+            ["position","右下",[555,1235]],
+            ["position","右下",[178,1240]]
+        ],
+        "_preEOTcheck":"LMG/LMG",
+        "_EOT":
+        [
+            ["press","intoWorldMap",["LMG/LMG","input swipe 690 590 690 690"],1],
+            ["press","LMG/FTB1F",[1,1],1]
         ]
     },
 
