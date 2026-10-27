@@ -7,63 +7,9 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError
 import subprocess
 import time
-from tkinter import ttk
-import tkinter as tk
 import queue
 from utils import *
 
-
-class CancelException(Exception):
-    """自定义取消异常"""
-    pass
-
-class Progressbar(tk.Toplevel):
-    def __init__(self,parent, title="进度", max_size = 1):
-        self.canceled = False
-        super().__init__(parent)
-        self.title(title)
-        self.geometry(f"300x100")
-        self.resizable(False, False)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        
-        # 创建进度条
-        self.bar = ttk.Progressbar(self, length=300-20, mode="determinate")
-        self.bar.pack(pady=20)
-        
-        self.downloaded_size_var = tk.IntVar(value = "")
-        label = ttk.Label(self, textvariable= self.downloaded_size_var)
-        label.pack()
-
-        # 最大值
-        self.max_size = max_size
-
-    def _on_cancel(self):
-        """取消按钮回调函数"""
-        self.canceled = True
-        self.quit()
-        self.destroy()
-
-    def update_progress(self, value):
-        """设置进度值并检查取消状态"""
-        if self.canceled:
-            raise CancelException("用户取消操作")
-
-        percent = round((value / self.max_size) * 100, 2)
-        self.bar["value"] = percent
-
-        def short_byte_string(bytes:int):
-            if bytes >= 1024*1024*1024:
-                return f"{round(bytes/1024/1024/1024,2)} GB"
-            if bytes >= 1024*1024:
-                return f"{round(bytes/1024/1024,2)} MB"
-            if bytes >= 1024:
-                return f"{round(bytes/1024,2)} KB"
-            return f"{bytes} B"
-
-        self.downloaded_size_var.set(f"{short_byte_string(value)} / {short_byte_string(self.max_size)} ({percent}%)")
-        
-        if self.canceled:
-            raise CancelException("用户取消操作")
 
 class AutoUpdater():
     def __init__(self, msg_queue: queue.Queue, github_user: str, github_repo: str, current_version: str):
@@ -110,12 +56,14 @@ class AutoUpdater():
                 print(f"发现新版本: {data['version']}")
                 self.update_data = data
                 self.msg_queue.put(('update_available', data))
+            else:
+                self.msg_queue.put(('update_current', {'version': self.current_version}))
 
         except (URLError, ValueError, json.JSONDecodeError) as e:
             # 发生错误，同样通过队列报告。
             error_message = f"检查更新失败: {e}"
             logger.error(error_message) # 暂时把这个关掉 看看是否是多线程问题
-            # self.msg_queue.put(('error', error_message))
+            self.msg_queue.put(('update_check_failed', error_message))
 
     def download(self):
         try:

@@ -17,15 +17,17 @@ DUNGEON_TARGETS = BuildQuestReflection()
         
 CONFIG_VAR_LIST = [
             #categor      var_name,                   type,          default_value
-            ["GENERAL",   "EMU_PATH",                 tk.StringVar,  None],
-            ["GENERAL",   "EMU_INDEX",                tk.IntVar,     0],
-            ["GENERAL",   "ADB_ADRESS",               tk.StringVar,  "127.0.0.1:16384"],
-            ["GENERAL",   "LAST_VERSION",             tk.StringVar,  None],
-            ["GENERAL",   "LATEST_VERSION",           tk.StringVar,  None],
-            ["GENERAL",   "FARM_TARGET_TEXT",         tk.StringVar,  ""],
-            ["GENERAL",   "FARM_TARGET",              tk.StringVar,  None],
-            ["GENERAL",   "KARMA_ADJUST",             tk.StringVar,  "+0"],
-            ["GENERAL",   "TASK_SPECIFIC_CONFIG",     tk.BooleanVar, False],
+            ["GENERAL",   "EMU_PATH",                 str,  None],
+            ["GENERAL",   "EMU_INDEX",                int,  0],
+            ["GENERAL",   "ADB_ADRESS",               str,  "127.0.0.1:16384"],
+            ["GENERAL",   "LAST_VERSION",             str,  None],
+            ["GENERAL",   "LATEST_VERSION",           str,  None],
+            ["GENERAL",   "AUTO_UPDATE",              bool, False],
+            ["GENERAL",   "IGNORED_UPDATE_VERSION",   str,  None],
+            ["GENERAL",   "FARM_TARGET_TEXT",         str,  ""],
+            ["GENERAL",   "FARM_TARGET",              str,  None],
+            ["GENERAL",   "KARMA_ADJUST",             str,  "+0"],
+            ["GENERAL",   "TASK_SPECIFIC_CONFIG",     bool, False],
             ["GENERAL",   "STRATEGY",                 list         , [{
                                                                         "group_name": _("柚子"),
                                                                         "skill_settings": [
@@ -41,38 +43,38 @@ CONFIG_VAR_LIST = [
                                                                         "group_name": _("全自动战斗"),
                                                                         "skill_settings": []
                                                                     },]],
-            ["GENERAL",   "DEFAULT_OVERALL_STRATEGY",               tk.StringVar, _("全自动战斗")],
-            ["GENERAL",   "LANGUAGE_SCRIPT",                        tk.StringVar, "zh_CN"],
-            ["GENERAL",   "LANGUAGE_GAME",                          tk.StringVar, "en_US"],
-            ["GENERAL",   "WEBSITE_ORG_TIME",                       tk.StringVar, None],
-            ["GENERAL",   "AM_REFRESH_TIME",                        tk.StringVar, None],
+            ["GENERAL",   "DEFAULT_OVERALL_STRATEGY",               str, _("全自动战斗")],
+            ["GENERAL",   "LANGUAGE_SCRIPT",                        str, "zh_CN"],
+            ["GENERAL",   "LANGUAGE_GAME",                          str, "en_US"],
+            ["GENERAL",   "WEBSITE_ORG_TIME",                       str, None],
+            ["GENERAL",   "AM_REFRESH_TIME",                        str, None],
 
             ["TEMPLATE",   "TASK_POINT_STRATEGY",                   dict,          {}],
-            ["TEMPLATE",   "QUICK_DISARM_CHEST",                    tk.BooleanVar, False],
-            ["TEMPLATE",   "WHO_WILL_OPEN_IT",                      tk.IntVar,     0],
-            ["TEMPLATE",   "DO_COMBAT_RECOVER",                     tk.BooleanVar, True],
-            ["TEMPLATE",   "DO_CHEST_RECOVER",                      tk.BooleanVar, True],
-            ["TEMPLATE",   "RECOVER_WHEN_BEGINNING",                tk.BooleanVar, False],
-            ["TEMPLATE",   "RECOVER_AFTER_REST",                    tk.BooleanVar, False],
-            ["TEMPLATE",   "ACTIVE_REST",                           tk.BooleanVar, True],
-            ["TEMPLATE",   "ACTIVE_ROYALSUITE_REST",                tk.BooleanVar, False],
-            ["TEMPLATE",   "ACTIVE_TRIUMPH",                        tk.BooleanVar, False],
-            ["TEMPLATE",   "ACTIVE_BEAUTIFUL_ORE",                  tk.BooleanVar, False],
-            ["TEMPLATE",   "ACTIVE_FISHING",                        tk.BooleanVar, False],
-            ["TEMPLATE",   "ACTIVE_DIGGING",                        tk.BooleanVar, False],
-            ["TEMPLATE",   "ACTIVE_BEG_MONEY",                      tk.BooleanVar, False],
-            ["TEMPLATE",   "MAX_TRY_LIMIT",                         tk.IntVar,     25],
-            ["TEMPLATE",   "MAX_CRASH_LIMIT",                       tk.IntVar,     10],
-            ["TEMPLATE",   "REST_INTERVEL",                         tk.IntVar,     1],
-            ["TEMPLATE",   "ACTIVE_CSC",                            tk.BooleanVar, True],
-            ["TEMPLATE",   "BYPASS_THE_WALL",                       tk.BooleanVar, False],
-            ["TEMPLATE",   "RE_ASSEMBLE_PARTY",                     tk.BooleanVar, False],
-            ["TEMPLATE",   "RE_ASSEMBLE_PARTY_INTERVAL",            tk.IntVar,     6],
+            ["TEMPLATE",   "QUICK_DISARM_CHEST",                    bool, False],
+            ["TEMPLATE",   "WHO_WILL_OPEN_IT",                      int,  0],
+            ["TEMPLATE",   "DO_COMBAT_RECOVER",                     bool, True],
+            ["TEMPLATE",   "DO_CHEST_RECOVER",                      bool, True],
+            ["TEMPLATE",   "RECOVER_WHEN_BEGINNING",                bool, False],
+            ["TEMPLATE",   "RECOVER_AFTER_REST",                    bool, False],
+            ["TEMPLATE",   "ACTIVE_REST",                           bool, True],
+            ["TEMPLATE",   "ACTIVE_ROYALSUITE_REST",                bool, False],
+            ["TEMPLATE",   "ACTIVE_TRIUMPH",                        bool, False],
+            ["TEMPLATE",   "ACTIVE_BEAUTIFUL_ORE",                  bool, False],
+            ["TEMPLATE",   "ACTIVE_FISHING",                        bool, False],
+            ["TEMPLATE",   "ACTIVE_DIGGING",                        bool, False],
+            ["TEMPLATE",   "ACTIVE_BEG_MONEY",                      bool, False],
+            ["TEMPLATE",   "MAX_TRY_LIMIT",                         int,  25],
+            ["TEMPLATE",   "MAX_CRASH_LIMIT",                       int,  10],
+            ["TEMPLATE",   "REST_INTERVEL",                         int,  1],
+            ["TEMPLATE",   "ACTIVE_CSC",                            bool, True],
+            ["TEMPLATE",   "BYPASS_THE_WALL",                       bool, False],
+            ["TEMPLATE",   "RE_ASSEMBLE_PARTY",                     bool, False],
+            ["TEMPLATE",   "RE_ASSEMBLE_PARTY_INTERVAL",            int,  6],
             ]
 class FarmConfig:
-    for attr_name, var_type, var_config_name, var_default_value in CONFIG_VAR_LIST:
-        locals()[var_config_name] = var_default_value
     def __init__(self):
+        for _, attr_name, _, default_value in CONFIG_VAR_LIST:
+            setattr(self, attr_name, copy.deepcopy(default_value))
         #### 面板配置其他
         self._FORCESTOPING = None
         self._FINISHINGCALLBACK = None

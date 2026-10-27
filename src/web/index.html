@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WvDAS Control Center</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要內容</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主要導覽">
+      <div class="brand"><span class="brand-mark">W</span><div><strong>WvDAS</strong><small id="version">CONTROL CENTER</small></div></div>
+      <nav id="nav"></nav>
+      <div class="device-mini"><span class="status-dot" id="device-dot"></span><div><small>ADB 連線目標</small><strong id="adb-mini">尚未設定</strong></div></div>
+    </aside>
+
+    <main id="main">
+      <header class="topbar">
+        <div><p class="eyebrow">AUTOMATION CONSOLE</p><h1 id="page-title">任務目標</h1></div>
+        <div class="top-actions"><button class="mode-button" id="mode-toggle" aria-pressed="false"><svg><use href="#i-phone"/></svg><span>精簡模式</span></button><span class="run-state" id="run-state"><i></i><span>待命</span></span><button class="icon-button" id="save" aria-label="儲存設定" title="儲存設定"><svg><use href="#i-save"/></svg></button></div>
+      </header>
+
+      <section class="compact-controls" id="compact-controls" aria-label="精簡控制"></section>
+
+      <div class="content-grid">
+        <section class="workspace" id="workspace" aria-live="polite"></section>
+        <aside class="telemetry">
+          <section class="summary-card"><div class="section-heading"><span>本次摘要</span><span class="live-label">LIVE</span></div><pre id="summary">尚未開始任務</pre></section>
+          <section class="log-card"><div class="section-heading"><span>執行日誌</span><button class="text-button" id="clear-log">清除</button></div><div id="logs" role="log" aria-live="polite"></div></section>
+        </aside>
+      </div>
+
+      <footer class="command-bar">
+        <div class="current-task-block"><small>目前任務</small><strong id="current-task">尚未選擇</strong></div>
+        <button class="start-button" id="start"><svg><use href="#i-play"/></svg><span>啟動腳本</span></button>
+      </footer>
+    </main>
+  </div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <dialog class="app-modal" id="app-modal" aria-labelledby="modal-title" aria-describedby="modal-message">
+    <div class="modal-head">
+      <h2 id="modal-title">提示</h2>
+      <button class="icon-button" id="modal-close" aria-label="關閉對話框" title="關閉">×</button>
+    </div>
+    <pre class="modal-message" id="modal-message"></pre>
+    <label class="modal-option" id="modal-option-row" hidden><input type="checkbox" id="modal-option"><span id="modal-option-label"></span></label>
+    <div class="modal-actions">
+      <button class="ghost-button" id="modal-cancel">取消</button>
+      <button class="secondary-button" id="modal-confirm">確定</button>
+    </div>
+  </dialog>
+
+  <svg class="svg-defs" aria-hidden="true">
+    <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 9-12h-7z"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h8M16 18h4"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6z"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M4 3h13l3 3v15H4zM8 3v6h8V3M8 21v-7h8v7"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 5h4M11 18h2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 5.8a5.5 5.5 0 0 0-7.8 0L12 6.8l-1-1a5.5 5.5 0 0 0-7.8 7.8L12 22l8.8-8.4a5.5 5.5 0 0 0 0-7.8z"/></symbol>
+  </svg>
+  <script src="app.js"></script>
+</body>
+</html>

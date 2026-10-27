@@ -1,5 +1,3 @@
-import tkinter as tk
-from tkinter import ttk, scrolledtext
 import json
 import os
 import copy
@@ -13,11 +11,7 @@ import gettext
 from loguru import logger
 from datetime import datetime
 
-# 基础模块包括:
-# LOGGER. 将输入写入到logger.txt文件中.
-# CONFIG. 保存和写入设置.
-# CHANGES LOG. 弹窗展示更新文档.
-# TOOLTIP. 鼠标悬停时的提示.
+# 基础模块包括日志、配置与图像处理。
 
 ############################################
 # Windows 下隐藏子进程的控制台窗口, 避免打包为 --noconsole 后闪现 cmd 黑框.
@@ -84,47 +78,6 @@ class LoggerStream:
 # 默认将 stdout/stderr 重定向到 loguru（可根据需要调用）
 sys.stdout = LoggerStream("DEBUG")
 sys.stderr = LoggerStream("ERROR")
-
-# GUI 文本框输出 sink（用于 Tkinter 界面）
-class ScrolledTextHandler:
-    """将日志输出到 Tkinter ScrolledText 组件"""
-    def __init__(self, text_widget):
-        self.text_widget = text_widget
-        self.text_widget.config(state=tk.DISABLED)
-
-    def write(self, message):
-        # loguru 传入的 message 是已格式化的字符串（可能含换行）
-        try:
-            self.text_widget.config(state=tk.NORMAL)
-            self.text_widget.insert(tk.END, message)
-            self.text_widget.see(tk.END)
-            self.text_widget.config(state=tk.DISABLED)
-        except Exception:
-            pass  # 忽略 GUI 销毁等异常
-
-# 为 GUI 添加日志 sink 的辅助函数
-_gui_handler_id = None
-def AddGuiLogHandler(text_widget, level="INFO", filter_func=None):
-    """添加 GUI 日志输出，返回 handler id"""
-    global _gui_handler_id
-    if _gui_handler_id is not None:
-        RemoveGuiLogHandler()
-    sink = ScrolledTextHandler(text_widget)
-    _gui_handler_id = logger.add(
-        sink.write,
-        level=level,
-        format="{time:HH:mm:ss} - {level} - {message}",
-        filter=filter_func,
-        enqueue=True,  # 确保线程安全
-    )
-    return _gui_handler_id
-
-def RemoveGuiLogHandler():
-    """移除 GUI 日志输出"""
-    global _gui_handler_id
-    if _gui_handler_id is not None:
-        logger.remove(_gui_handler_id)
-        _gui_handler_id = None
 
 # 自定义过滤器示例：只显示 summary 为 True 的记录
 def summary_filter(record):
@@ -268,43 +221,6 @@ localedir = ResourcePath("locale")
 trans = gettext.translation('messages', localedir, languages=[LANGUAGE_SCRIPT], fallback=True)
 trans.install()
 _ = trans.gettext
-
-###########################################
-CHANGES_LOG = "CHANGES_LOG.md"
-def ShowChangesLogWindow():
-    log_window = tk.Toplevel()
-    log_window.title(_("更新日志"))
-    log_window.geometry("700x500")
-
-    log_window.lift()
-    log_window.attributes('-topmost', True)
-    log_window.after(100, lambda: log_window.attributes('-topmost', False))
-    
-    text_area = scrolledtext.ScrolledText(
-        log_window, 
-        wrap=tk.WORD,
-        font=("Segoe UI", 10),
-        padx=10,
-        pady=10
-    )
-    text_area.pack(fill=tk.BOTH, expand=True)
-    text_area.configure(state='disabled')
-    
-    try:
-        with open(CHANGES_LOG, "r", encoding="utf-8") as file:
-            markdown_content = file.read()
-        text_area.configure(state='normal')
-        text_area.delete(1.0, tk.END)
-        text_area.insert(tk.INSERT, markdown_content)
-        text_area.configure(state='disabled')
-    except FileNotFoundError:
-        text_area.configure(state='normal')
-        text_area.insert(tk.INSERT, f"错误：未找到{CHANGES_LOG}文件")
-        text_area.configure(state='disabled')
-    except Exception as e:
-        text_area.configure(state='normal')
-        text_area.insert(tk.INSERT, f"读取文件时出错: {str(e)}")
-        text_area.configure(state='disabled')
 
 ###########################################
 QUEST_FILE_BASE = 'resources/quest/quest.json'
@@ -469,51 +385,6 @@ CHAR_LIST = sorted(list({
 }))
 
 CHAR_DISPLAY_TO_ID = {_(c): c for c in CHAR_LIST}
-###########################################
-class Tooltip:
-    def __init__(self, widget, text):
-        self.widget = widget
-        self.text = text
-        self.tooltip_window = None
-        self.widget.bind("<Enter>", self.show_tooltip)
-        self.widget.bind("<Leave>", self.hide_tooltip)
-
-    def show_tooltip(self, event=None):
-        if self.tooltip_window:
-            return
-            
-        widget_x = self.widget.winfo_rootx()
-        widget_y = self.widget.winfo_rooty()
-        widget_width = self.widget.winfo_width()
-        widget_height = self.widget.winfo_height()
-        
-        self.tooltip_window = tk.Toplevel(self.widget)
-        self.tooltip_window.wm_overrideredirect(True)
-        self.tooltip_window.attributes("-alpha", 0.95)
-        
-        label = ttk.Label(
-            self.tooltip_window, 
-            text=self.text, 
-            background="#ffffe0", 
-            relief="solid", 
-            borderwidth=1,
-            padding=(8, 4),
-            font=("Arial", 10),
-            justify="left",
-            wraplength=300
-        )
-        label.pack()
-        
-        x = widget_x + widget_width + 2
-        y = widget_y + widget_height//2
-        
-        self.tooltip_window.wm_geometry(f"+{int(x)}+{int(y)}")
-        self.tooltip_window.deiconify()
-
-    def hide_tooltip(self, event=None):
-        if self.tooltip_window:
-            self.tooltip_window.destroy()
-            self.tooltip_window = None
 ###########################################
 SHAPE_TEMPLATE = {}
 def registerTemplate(path, to_gray=True):
